@@ -4,19 +4,18 @@
  * https://github.com/cinit/QAuxiliary
  *
  * This software is non-free but opensource software: you can redistribute it
- * and/or modify it under the terms of the GNU Affero General Public License
- * as published by the Free Software Foundation; either
- * version 3 of the License, or any later version and our eula as published
+ * and/or modify it under the terms of the qwq233 Universal License
+ * as published on https://github.com/qwq233/license; either
+ * version 2 of the License, or any later version and our EULA as published
  * by QAuxiliary contributors.
  *
  * This software is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Affero General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See the qwq233 Universal License for more details.
  *
- * You should have received a copy of the GNU Affero General Public License
- * and eula along with this software.  If not, see
- * <https://www.gnu.org/licenses/>
+ * See
+ * <https://github.com/qwq233/license>
  * <https://github.com/cinit/QAuxiliary/blob/master/LICENSE.md>.
  */
 package cc.ioctl.hook.msg
@@ -25,15 +24,17 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.DialogInterface
 import android.text.Spanned
-import android.text.method.LinkMovementMethod
 import android.text.style.ClickableSpan
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.RelativeLayout
+import android.widget.TextView
 import androidx.appcompat.widget.AppCompatTextView
 import androidx.core.text.buildSpannedString
+import androidx.core.text.method.LinkMovementMethodCompat
+import cc.hicore.QApp.QAppUtils
 import cc.ioctl.hook.profile.OpenProfileCard
 import cc.ioctl.util.HostInfo
 import cc.ioctl.util.HostStyledViewBuilder
@@ -41,16 +42,16 @@ import cc.ioctl.util.LayoutHelper
 import cc.ioctl.util.Reflex
 import cc.ioctl.util.hookBeforeIfEnabled
 import cc.ioctl.util.ui.FaultyDialog
-import com.github.kyuubiran.ezxhelper.utils.findMethod
 import com.github.kyuubiran.ezxhelper.utils.hookBefore
 import com.tencent.qqnt.kernel.nativeinterface.MsgRecord
-import de.robv.android.xposed.XC_MethodHook.MethodHookParam
 import io.github.qauxv.R
 import io.github.qauxv.base.annotation.DexDeobfs
 import io.github.qauxv.base.annotation.FunctionHookEntry
 import io.github.qauxv.base.annotation.UiItemAgentEntry
+import io.github.qauxv.bridge.ntapi.ChatTypeConstants
 import io.github.qauxv.dsl.FunctionEntryRouter
 import io.github.qauxv.hook.CommonSwitchFunctionHook
+import io.github.qauxv.step.Step
 import io.github.qauxv.ui.CommonContextWrapper
 import io.github.qauxv.ui.CustomDialog
 import io.github.qauxv.util.Initiator
@@ -58,8 +59,14 @@ import io.github.qauxv.util.Log
 import io.github.qauxv.util.QQVersion
 import io.github.qauxv.util.UiThread
 import io.github.qauxv.util.dexkit.CAIOUtils
+import io.github.qauxv.util.dexkit.DexDeobfsProvider.getCurrentBackend
+import io.github.qauxv.util.dexkit.DexKit
 import io.github.qauxv.util.dexkit.DexKit.loadClassFromCache
+import io.github.qauxv.util.dexkit.DexKitFinder
+import io.github.qauxv.util.dexkit.DexKitTargetSealedEnum.nameOf
+import io.github.qauxv.util.dexkit.Multiforward_Avatar_setListener_NT
 import io.github.qauxv.util.requireMinQQVersion
+import io.github.qauxv.util.xpcompat.XC_MethodHook.MethodHookParam
 import me.ketal.dispacher.BaseBubbleBuilderHook
 import me.ketal.dispacher.OnBubbleBuilder
 import me.singleneuron.data.MsgRecordData
@@ -69,7 +76,7 @@ import java.lang.reflect.Modifier
 
 @FunctionHookEntry
 @UiItemAgentEntry
-object MultiForwardAvatarHook : CommonSwitchFunctionHook(arrayOf(CAIOUtils)), OnBubbleBuilder {
+object MultiForwardAvatarHook : CommonSwitchFunctionHook(arrayOf(CAIOUtils, Multiforward_Avatar_setListener_NT)), OnBubbleBuilder, DexKitFinder {
 
     override val name = "转发消息点头像查看详细信息"
     override val description = "仅限合并转发的消息"
@@ -77,35 +84,91 @@ object MultiForwardAvatarHook : CommonSwitchFunctionHook(arrayOf(CAIOUtils)), On
 
     private var mChatItemHeadIconViewId = 0
 
+
+    override val isNeedFind: Boolean
+        get() = QAppUtils.isQQnt() && Multiforward_Avatar_setListener_NT.descCache == null
+
+    override fun doFind(): Boolean {
+        getCurrentBackend().use { backend ->
+            val dexKit = backend.getDexKitBridge()
+            val m = dexKit.findMethod {
+                matcher {
+                    declaredClass = "com.tencent.mobileqq.aio.msglist.holder.component.avatar.AIOAvatarContentComponent"
+                    returnType = "void"
+                    paramTypes(*arrayOf<Class<*>>())
+                    addInvoke {
+                        name = "setOnClickListener"
+                    }
+                }
+            }
+            if (m.size != 1) return false
+            Log.d("save id: " + nameOf(Multiforward_Avatar_setListener_NT) + ",method: " + m.first().descriptor)
+            Multiforward_Avatar_setListener_NT.descCache = m.first().descriptor
+            return true
+        }
+    }
+
+    private val mStep: Step = object : Step {
+        override fun step(): Boolean {
+            return doFind()
+        }
+
+        override fun isDone(): Boolean {
+            return !isNeedFind
+        }
+
+        override fun getPriority(): Int {
+            return 0
+        }
+
+        override fun getDescription(): String {
+            return "点击事件相关方法查找中"
+        }
+    }
+
+    private val mSteps by lazy {
+        val steps = mutableListOf(mStep)
+        super.makePreparationSteps()?.let {
+            steps.addAll(it)
+        }
+        steps.toTypedArray()
+    }
+
+    override fun makePreparationSteps(): Array<Step> = mSteps
+
+    override val isPreparationRequired: Boolean
+        get() = isNeedFind || DexKit.isRunDexDeobfuscationRequired(CAIOUtils)
+
     @SuppressLint("DiscouragedApi")
     @Throws(Exception::class)
     public override fun initOnce(): Boolean {
-        if (requireMinQQVersion(QQVersion.QQ_8_9_63)) {
+        if (requireMinQQVersion(QQVersion.QQ_8_9_63_BETA_11345)) {
             val clz = Initiator.loadClass("com.tencent.mobileqq.aio.msglist.holder.component.avatar.AIOAvatarContentComponent")
             // 设置头像点击和长按事件的方法
-            clz.findMethod {
-                name == if (requireMinQQVersion(QQVersion.QQ_8_9_68)) "Q0"
-                else "R0"   //8.9.63
-            }.hookBefore { param ->
+            DexKit.requireMethodFromCache(Multiforward_Avatar_setListener_NT).hookBefore { param ->
                 var layout: RelativeLayout?
-                clz.declaredFields.first { it.name == "h" }.let {
+                clz.declaredFields.single {//Lazy avatarContainer
+                    it.name == if (requireMinQQVersion(QQVersion.QQ_9_0_90)) "h"
+                    else if (requireMinQQVersion(QQVersion.QQ_9_0_65)) "i"
+                    else "h"
+                }.let {
                     it.isAccessible = true  //Lazy
                     layout = (it.get(param.thisObject))!!.invoke("getValue") as RelativeLayout
                 }
                 if (layout!!.context.javaClass.name == "com.tencent.mobileqq.activity.MultiForwardActivity") {
                     layout!!.setOnClickListener {
-                        clz.declaredFields.first {
+                        clz.declaredFields.single {
                             it.type.name == "com.tencent.mobileqq.aio.msg.AIOMsgItem"
                         }.let {
                             it.isAccessible = true
-                            (it.get(param.thisObject)!!.invoke("getMsgRecord")!! as MsgRecord).let {
-                                val senderUin = it.senderUin   //对方QQ
-                                val peerUid = it.peerUid as String //对方，如果是群聊则是群号，如果是私聊则是u_串
-                                if (peerUid.startsWith("u_")) {
-                                    createAndShowDialogCommon(layout!!.context, it, senderUin, null)
-                                } else {
-                                    createAndShowDialogCommon(layout!!.context, it, senderUin, peerUid.toLong())
+                            try {
+                                (it.get(param.thisObject)!!.invoke("getMsgRecord")!! as MsgRecord).let {
+                                    val senderUin = it.senderUin   //对方QQ
+                                    val troopUin = if (it.chatType == ChatTypeConstants.GROUP) it.peerUin else null
+                                    createAndShowDialogCommon(layout!!.context, it, senderUin, troopUin)
                                 }
+                            } catch (e: Exception) {
+                                FaultyDialog.show(layout!!.context, e)
                             }
                         }
                     }
@@ -114,6 +177,8 @@ object MultiForwardAvatarHook : CommonSwitchFunctionHook(arrayOf(CAIOUtils)), On
             }
             return true
         }
+
+
         BaseBubbleBuilderHook.initialize()
         val kBaseBubbleBuilder = Initiator.loadClass("com/tencent/mobileqq/activity/aio/BaseBubbleBuilder")
         val onClick = kBaseBubbleBuilder.getMethod("onClick", View::class.java)
@@ -184,6 +249,10 @@ object MultiForwardAvatarHook : CommonSwitchFunctionHook(arrayOf(CAIOUtils)), On
         headIconView.setOnClickListener(baseBubbleBuilderOnClick)
     }
 
+    override fun onGetViewNt(rootView: ViewGroup, chatMessage: MsgRecord, param: MethodHookParam) {
+        // 此处无需实现
+    }
+
     private var mLeftCheckBoxVisible: Field? = null
 
     /**
@@ -210,7 +279,12 @@ object MultiForwardAvatarHook : CommonSwitchFunctionHook(arrayOf(CAIOUtils)), On
     @UiThread
     private fun createAndShowDialogCommon(hostContext: Context, msg: Any, senderUin: Long, troopUin: Long?) {
         check(senderUin > 0) { "senderUin must be positive, got $senderUin" }
-        check(troopUin == null || troopUin > 0) { "troopUin must be positive or null, got $troopUin" }
+        //check(troopUin == null || troopUin > 0) { "troopUin must be positive or null, got $troopUin" }
+        // 2023.7.20 NT版收到的合并转发中群号变为0
+        // 2023.8.1 收到的合并转发中群号变为284840486
+        val isTroopUinAvailable = troopUin != null && troopUin != 0L && troopUin != 284840486L
+        // 2023-09-06 起合并转发中 senderUin 变为 1094950020
+        val isSenderUinAvailable = senderUin != 0L && senderUin != 1094950020L
         val ctx = CommonContextWrapper.createAppCompatContext(hostContext)
         val dialog = CustomDialog.createFailsafe(ctx).setTitle(Reflex.getShortClassName(msg))
             .setPositiveButton("确认", null).setCancelable(true)
@@ -223,29 +297,43 @@ object MultiForwardAvatarHook : CommonSwitchFunctionHook(arrayOf(CAIOUtils)), On
         ll.setPadding(p, p / 3, p, p / 3)
         if (troopUin != null) {
             // troop
-            HostStyledViewBuilder.newDialogClickableItemClickToCopy(ctx, "群号", troopUin.toString(), ll, true) {
-                OpenProfileCard.openTroopProfileActivity(ctx, troopUin.toString())
-            }
-            HostStyledViewBuilder.newDialogClickableItemClickToCopy(ctx, "成员", senderUin.toString(), ll, true) {
-                if (senderUin > 10000) {
-                    OpenProfileCard.openUserProfileCard(ctx, senderUin)
+            if (isTroopUinAvailable) {
+                HostStyledViewBuilder.newDialogClickableItemClickToCopy(ctx, "群号", troopUin.toString(), ll, true) {
+                    OpenProfileCard.openTroopProfileActivity(ctx, troopUin.toString())
                 }
+            } else {
+                HostStyledViewBuilder.newDialogClickableItem(ctx, "群号", "已被服务器端屏蔽", null, null, ll, true)
+            }
+            if (isSenderUinAvailable) {
+                HostStyledViewBuilder.newDialogClickableItemClickToCopy(ctx, "成员", senderUin.toString(), ll, true) {
+                    if (senderUin > 10000) {
+                        OpenProfileCard.openUserProfileCard(ctx, senderUin)
+                    }
+                }
+            } else {
+                HostStyledViewBuilder.newDialogClickableItem(ctx, "成员", "已被服务器端屏蔽", null, null, ll, true)
             }
         } else {
             // private chat
-            HostStyledViewBuilder.newDialogClickableItemClickToCopy(ctx, "发送者", senderUin.toString(), ll, true) {
-                if (senderUin > 10000) {
-                    OpenProfileCard.openUserProfileCard(ctx, senderUin)
+            if (isSenderUinAvailable) {
+                HostStyledViewBuilder.newDialogClickableItemClickToCopy(ctx, "发送者", senderUin.toString(), ll, true) {
+                    if (senderUin > 10000) {
+                        OpenProfileCard.openUserProfileCard(ctx, senderUin)
+                    }
                 }
+            } else {
+                HostStyledViewBuilder.newDialogClickableItem(ctx, "发送者", "已被服务器端屏蔽", null, null, ll, true)
             }
         }
         val disclaimerTextView = AppCompatTextView(ctx).apply {
             // required for ClickableSpan
-            movementMethod = LinkMovementMethod.getInstance()
+            movementMethod = LinkMovementMethodCompat.getInstance()
         }
         val runnable = {
             val disclaimer = """
                 警告：以上信息可能是完全错误的。
+                问: “已被服务器端屏蔽”是什么意思？ 
+                答：QQ 服务器端屏蔽（和谐）了该信息，因此无法获取，我也没有办法。
                 QQ 的合并转发消息内容是由转发者的客户端生成后上传服务器的，而不是在服务器上合并后再下发的。
                 因此，合并转发消息的内容存在被篡改和伪造的可能。
                 在非恶意情形下，PC 端 QQ 在合并转发提供的群号可能是错误的，而 Android 端 QQ 合并转发提供的群号通常是正确的。
@@ -255,6 +343,7 @@ object MultiForwardAvatarHook : CommonSwitchFunctionHook(arrayOf(CAIOUtils)), On
         }
         disclaimerTextView.text = buildSpannedString {
             append("单击可打开，长按可复制\n")
+            append("问: “已被服务器端屏蔽”是什么意思？ \n答：QQ 服务器端屏蔽（和谐）了该信息，因此无法获取，我也没有办法。\n")
             append("以上信息仅供参考，本模块不对以上信息的正确性负责，以上信息不得作为任何依据。\n")
             append("了解详情", object : ClickableSpan() {
                 override fun onClick(widget: View) {
@@ -273,9 +362,15 @@ object MultiForwardAvatarHook : CommonSwitchFunctionHook(arrayOf(CAIOUtils)), On
             Log.e("createAndShowDialogForDetail/E msg == null")
             return
         }
-        CustomDialog.createFailsafe(ctx).setTitle(Reflex.getShortClassName(msg))
+        CustomDialog.createFailsafe(ctx)
+            .setTitle(Reflex.getShortClassName(msg))
             .setMessage(msg.toString())
-            .setCancelable(true).setPositiveButton("确定", null).show()
+            .setCancelable(true)
+            .setPositiveButton("确定", null)
+            .show()
+            .apply {
+                findViewById<TextView>(android.R.id.message).setTextIsSelectable(true)
+            }
     }
 
     private val isLeftCheckBoxVisible: Boolean

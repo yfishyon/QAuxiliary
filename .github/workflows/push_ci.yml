@@ -7,6 +7,9 @@ on:
     paths-ignore:
       - '**.md'
       - '**.txt'
+      - 'renovate.json'
+      - '.editorconfig'
+      - '.gitignore'
       - '.github/**'
       - '.idea/**'
       - '!.github/workflows/**'
@@ -14,7 +17,7 @@ on:
 jobs:
   build:
     name: Build CI (Push)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
       CCACHE_NOHASHDIR: "true"
@@ -23,29 +26,43 @@ jobs:
     if: ${{ !startsWith(github.event.head_commit.message, '[skip ci]') }} && success() && github.ref == 'refs/heads/main' }}
 
     steps:
-      - uses: actions/checkout@v3.5.3
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          submodules: 'recursive'
+          submodules: 'true'
           fetch-depth: 0
+
+      - name: Config submodules
+        run: |
+          git -C "libs/LSPlant" config "submodule.test/src/main/jni/external/lsprism.update" none
+          git -C "libs/LSPlant" config "submodule.test/src/main/jni/external/lsparself.update" none
+          git -C "libs/LSPlant" config "submodule.docs/doxygen-awesome-css.update" none
+          git -C "libs/mmkv/MMKV" config "submodule.Python/pybind11.update" none
+          git submodule foreach git submodule update --init --recursive
+
       - name: set up JDK 17
-        uses: actions/setup-java@v3.11.0
+        uses: actions/setup-java@v4.7.0
         with:
           java-version: '17'
           distribution: 'adopt'
-      - name: Setup cmake
+      - name: Setup SDK
         run: |
-          echo "y" | sudo ${ANDROID_HOME}/tools/bin/sdkmanager --install "cmake;3.22.1" --sdk_root=${ANDROID_SDK_ROOT} &> /dev/null
+          echo "ANDROID_HOME=${ANDROID_HOME}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}"
+          mkdir -p "$ANDROID_HOME/licenses/"
+          echo > "$ANDROID_HOME/licenses/android-sdk-license"
+          echo -n 24333f8a63b6825ea9c5514f83c2829b004d1fee > "$ANDROID_HOME/licenses/android-sdk-license"
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "cmake;3.31.0"
           echo "sdk.dir=${ANDROID_HOME}" > local.properties
       - name: Install ccache
         run: |
-          sudo apt install -y ccache
+          sudo apt install -y ccache ninja-build
           ccache -o max_size=1G
           ccache -o hash_dir=false
           ccache -o hard_link=true
           ccache -o compiler_check='%compiler% -dumpmachine; %compiler% -dumpversion'
           ccache -zp
       - name: Cache Native Build
-        uses: actions/cache@v3.3.1
+        uses: actions/cache@v4.2.0
         with:
           path: |
             ~/.cache/ccache
@@ -55,26 +72,29 @@ jobs:
           restore-keys: native-cache-
 
       - name: Setup Gradle
-        uses: gradle/gradle-build-action@v2.5.1
+        uses: gradle/gradle-build-action@v3.5.0
 
       - name: Build with Gradle
         run: |
           echo 'org.gradle.parallel=true' >> gradle.properties
           echo 'org.gradle.vfs.watch=true' >> gradle.properties
+          echo 'qauxv.override.ninja.path=/usr/bin/ninja' >> local.properties
           sed -i 's/org.gradle.configuration-cache=true//g' gradle.properties
           echo 'buildCache { local { removeUnusedEntriesAfterDays = 1 } }' >> settings.gradle.kts
           echo ${{ secrets.SIGN_KEYSTORE_BASE64 }} | base64 -d > keystore.jks
-          ./gradlew :app:synthesizeDistReleaseApksCI
+          ./gradlew :app:synthesizeDistReleaseApksCI :app:extractReleaseNativeDebugMetadata
           ccache -s
           echo "APK_FILE_ARM32=$(find app/build/outputs/ci -name '*arm32.apk')" >> $GITHUB_ENV
           echo "APK_FILE_ARM64=$(find app/build/outputs/ci -name '*arm64.apk')" >> $GITHUB_ENV
           echo "APK_FILE_ARMALL=$(find app/build/outputs/ci -name '*armAll.apk')" >> $GITHUB_ENV
           echo "APK_FILE_UNIVERSAL=$(find app/build/outputs/ci -name '*universal.apk')" >> $GITHUB_ENV
+          echo "SYMBOL_FILE=app/build/intermediates/native_debug_metadata/release/extractReleaseNativeDebugMetadata/out" >> $GITHUB_ENV
         env:
           KEYSTORE_PATH: "../keystore.jks"
           KEYSTORE_PASSWORD: ${{ secrets.SIGN_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.SIGN_ALIAS }}
           KEY_PASSWORD: ${{ secrets.SIGN_KEY_PASSWORD }}
+          QAUXV_OVERRIDE_CMAKE_VERSION: "3.31.0"
 
       - name: Show Artifacts SHA256
         run: |
@@ -91,25 +111,30 @@ jobs:
           echo "|universal|$universal" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload Artifacts(arm32)
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           path: ${{ env.APK_FILE_ARM32 }}
           name: QAuxiliary-release-${{ github.event.head_commit.id }}-arm32
       - name: Upload Artifacts(arm64)
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           path: ${{ env.APK_FILE_ARM64 }}
           name: QAuxiliary-release-${{ github.event.head_commit.id }}-arm64
       - name: Upload Artifacts(armAll)
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           path: ${{ env.APK_FILE_ARMALL }}
           name: QAuxiliary-release-${{ github.event.head_commit.id }}-armAll
       - name: Upload Artifacts(universal)
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           path: ${{ env.APK_FILE_UNIVERSAL }}
           name: QAuxiliary-release-${{ github.event.head_commit.id }}-universal
+      - name: Upload Artifacts(symbol)
+        uses: actions/upload-artifact@v4
+        with:
+          path: ${{ env.SYMBOL_FILE }}
+          name: QAuxiliary-release-${{ github.event.head_commit.id }}-symbol
 
   upload-telegram:
     name: Upload Release
@@ -120,18 +145,18 @@ jobs:
       - telegram-bot-api
     steps:
       - name: Download Artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
       - name: Download Telegram Bot API Binary
-        uses: actions/download-artifact@master
+        uses: actions/download-artifact@v4
         with:
           name: telegram-bot-api-binary
           path: .
       - name: Release
         env:
           COMMIT_MESSAGE: |+
-            New push to github\!
+            New push to GitHub\!
             ```
             ${{ github.event.head_commit.message }}
             ```by `${{ github.event.head_commit.author.name }}`
@@ -143,48 +168,31 @@ jobs:
           export arm64=$(find artifacts -name "*arm64.apk")
           export armAll=$(find artifacts -name "*armAll.apk")
           export universal=$(find artifacts -name "*universal.apk")
+          export SYMBOL_ZIP_NAME=$(echo $universal | sed 's/universal.apk/symbol.zip/')
+          find artifacts -name "*.so.dbg" -print | zip "$SYMBOL_ZIP_NAME" -@
           chmod +x telegram-bot-api-binary
           ./telegram-bot-api-binary --api-id=21724 --api-hash=3e0cb5efcd52300aec5994fdfc5bdc16 --local 2>&1 > /dev/null &
-          curl -v "http://127.0.0.1:8081/bot${{ secrets.TELEGRAM_TOKEN  }}/sendMediaGroup?chat_id=-1001732413298&media=%5B%7B%22type%22%3A%22document%22%2C%20%22media%22%3A%22attach%3A%2F%2Farm64%22%7D%2C%7B%22type%22%3A%22document%22%2C%20%22media%22%3A%22attach%3A%2F%2Farm32%22%7D%2C%7B%22type%22%3A%22document%22%2C%20%22media%22%3A%22attach%3A%2F%2FarmAll%22%7D%2C%7B%22type%22%3A%22document%22%2C%20%22media%22%3A%22attach%3A%2F%2Funiversal%22%2C%22parse_mode%22%3A%22MarkdownV2%22%2C%22caption%22:${ESCAPED}%7D%5D" \
+          curl -v "http://127.0.0.1:8081/bot${{ secrets.TELEGRAM_TOKEN  }}/sendMediaGroup?chat_id=-1001732413298&media=%5B%7B%22type%22%3A%22document%22%2C%20%22media%22%3A%22attach%3A%2F%2Farm64%22%7D%2C%7B%22type%22%3A%22document%22%2C%20%22media%22%3A%22attach%3A%2F%2Farm32%22%7D%2C%7B%22type%22%3A%22document%22%2C%20%22media%22%3A%22attach%3A%2F%2FarmAll%22%7D%2C%7B%22type%22%3A%22document%22%2C%20%22media%22%3A%22attach%3A%2F%2Funiversal%22%7D%2C%7B%22type%22%3A%22document%22%2C%20%22media%22%3A%22attach%3A%2F%2Fsymbol%22%2C%22parse_mode%22%3A%22MarkdownV2%22%2C%22caption%22:${ESCAPED}%7D%5D" \
            -F arm32="@$arm32" \
            -F arm64="@$arm64" \
            -F armAll="@$armAll" \
-           -F universal="@$universal"
+           -F universal="@$universal" \
+           -F symbol="@$SYMBOL_ZIP_NAME"
           pkill telegram-bot
-
-  upload-taichi:
-    name: Upload TaiChi
-    if: ${{ success() && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
-    needs:
-      - build
-    steps:
-      - name: Download Artifacts
-        uses: actions/download-artifact@v3
-        with:
-          path: artifacts
-      - name: Release
-        run: |
-          curl "https://gist.githubusercontent.com/qwq233/2a903f28a38d48d57731a1e4d6358948/raw/80e515d659a6f3c4737a1674f50fae5087e1f83c/taichi.py" -o taichi.py
-          sudo apt install -y python3-pip
-          pip3 install requests
-          echo ${{ secrets.TC_UPLOAD_USER_TOKEN }} | base64 -d > taichi.json
-          export release=$(find $OUTPUT -name "*armAll.apk")
-          python3 taichi.py $release
 
   telegram-bot-api:
     name: Telegram Bot API
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3.5.3
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Clone Telegram Bot API
         run: |
           git clone --recursive https://github.com/tdlib/telegram-bot-api.git
           git status telegram-bot-api >> telegram-bot-api-status
       - name: Cache Bot API Binary
         id: cache-bot-api
-        uses: actions/cache@v3.3.1
+        uses: actions/cache@v4.2.0
         with:
           path: telegram-bot-api-binary
           key: CI-telegram-bot-api-${{ hashFiles('telegram-bot-api-status') }}
@@ -203,7 +211,7 @@ jobs:
           ls -l telegram-bot-api/bin/telegram-bot-api*
           cp telegram-bot-api/bin/telegram-bot-api telegram-bot-api-binary
       - name: Upload Binary
-        uses: actions/upload-artifact@master
+        uses: actions/upload-artifact@v4
         with:
           name: telegram-bot-api-binary
           path: telegram-bot-api-binary

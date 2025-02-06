@@ -4,19 +4,18 @@
  * https://github.com/cinit/QAuxiliary
  *
  * This software is non-free but opensource software: you can redistribute it
- * and/or modify it under the terms of the GNU Affero General Public License
- * as published by the Free Software Foundation; either
- * version 3 of the License, or any later version and our eula as published
+ * and/or modify it under the terms of the qwq233 Universal License
+ * as published on https://github.com/qwq233/license; either
+ * version 2 of the License, or any later version and our EULA as published
  * by QAuxiliary contributors.
  *
  * This software is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Affero General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See the qwq233 Universal License for more details.
  *
- * You should have received a copy of the GNU Affero General Public License
- * and eula along with this software.  If not, see
- * <https://www.gnu.org/licenses/>
+ * See
+ * <https://github.com/qwq233/license>
  * <https://github.com/cinit/QAuxiliary/blob/master/LICENSE.md>.
  */
 package cc.hicore.dialog;
@@ -27,6 +26,7 @@ import android.content.DialogInterface;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.drawable.BitmapDrawable;
+import android.os.Environment;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.LayoutInflater;
@@ -48,6 +48,7 @@ import cc.ioctl.util.HostInfo;
 import cc.ioctl.util.LayoutHelper;
 import cc.ioctl.util.ui.FaultyDialog;
 import cc.ioctl.util.ui.drawable.DebugDrawable;
+import io.github.duzhaokun123.util.FilePicker;
 import io.github.qauxv.R;
 import io.github.qauxv.config.ConfigManager;
 import io.github.qauxv.ui.CustomDialog;
@@ -62,6 +63,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Locale;
+import kotlin.Unit;
 
 public class RepeaterPlusIconSettingDialog implements View.OnClickListener,
         DialogInterface.OnClickListener, TextWatcher,
@@ -80,6 +82,7 @@ public class RepeaterPlusIconSettingDialog implements View.OnClickListener,
     private final AlertDialog dialog;
     private final Button loadBtn;
     private final Button browseBtn;
+    private final Button browseBtn2;
     private final Button restoreDefBtn;
     private final EditText pathInput;
     private final ImageView prevImgView;
@@ -115,6 +118,8 @@ public class RepeaterPlusIconSettingDialog implements View.OnClickListener,
         loadBtn.setOnClickListener(this);
         browseBtn = v.findViewById(R.id.selectRepeaterIcon_buttonBrowseImg);
         browseBtn.setOnClickListener(this);
+        browseBtn2 = v.findViewById(R.id.selectRepeaterIcon_buttonBrowseImg2);
+        browseBtn2.setOnClickListener(this);
         restoreDefBtn = v.findViewById(R.id.selectRepeaterIcon_buttonRestoreDefaultIcon);
         restoreDefBtn.setOnClickListener(this);
         prevImgView = v.findViewById(R.id.selectRepeaterIcon_imageViewPreview);
@@ -135,7 +140,7 @@ public class RepeaterPlusIconSettingDialog implements View.OnClickListener,
         check_showInMenu.setChecked(cfg.getBooleanOrFalse(qn_repeat_show_in_menu));
 
         // temporary
-        if (HostInfo.requireMinQQVersion(QQVersion.QQ_8_9_63)) {
+        if (HostInfo.requireMinQQVersion(QQVersion.QQ_8_9_63_BETA_11345)) {
             check_showUpper.setEnabled(false);
         }
 
@@ -325,6 +330,11 @@ public class RepeaterPlusIconSettingDialog implements View.OnClickListener,
                         }
                     }
             ).commit();
+        } else if (v == browseBtn2) {
+            FilePicker.INSTANCE.pickFile(ctx, "选择 +1 图标", Environment.getExternalStorageDirectory().getPath(), path -> {
+                pathInput.setText(path);
+                return Unit.INSTANCE;
+            });
         }
     }
 

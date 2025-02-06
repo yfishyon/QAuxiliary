@@ -26,16 +26,21 @@ import android.app.Activity
 import android.content.Context
 import android.view.View
 import cc.ioctl.util.HostInfo
+import io.github.qauxv.base.IEntityAgent
 import io.github.qauxv.base.ISwitchCellAgent
 import io.github.qauxv.base.IUiItemAgent
+import io.github.qauxv.base.RuntimeErrorTracer
 import io.github.qauxv.config.ConfigManager
 import io.github.qauxv.hook.BaseFunctionHook
+import io.github.qauxv.util.Initiator
+import io.github.qauxv.util.Log
 import io.github.qauxv.util.hostInfo
 import kotlinx.coroutines.flow.MutableStateFlow
 import xyz.nextalone.util.method
 import xyz.nextalone.util.throwOrTrue
+import java.lang.reflect.InvocationTargetException
 
-abstract class PluginDelayableHook(keyName: String) : BaseFunctionHook(keyName) {
+abstract class PluginDelayableHook(keyName: String) : BaseFunctionHook(hookKey = keyName) {
 
     abstract val pluginID: String
     abstract val preference: IUiItemAgent
@@ -56,8 +61,38 @@ abstract class PluginDelayableHook(keyName: String) : BaseFunctionHook(keyName) 
         if (disablePluginDelayableHook) {
             error("disablePluginDelayableHook")
         }
-        val classLoader = m.invoke(null, hostInfo.application, pluginID) as ClassLoader
-        startHook(classLoader)
+        Log.i("startHook: $pluginID")
+        try {
+            if ("Lcom/tencent/mobileqq/pluginsdk/IPluginAdapterProxy;->getProxy()Lcom/tencent/mobileqq/pluginsdk/IPluginAdapterProxy;".method.apply {
+                    isAccessible = true
+                }.invoke(null) == null) {
+                Log.i("getProxy: null")
+                "Lcom/tencent/mobileqq/pluginsdk/IPluginAdapterProxy;->setProxy(Lcom/tencent/mobileqq/pluginsdk/IPluginAdapter;)V".method.apply {
+                    isAccessible = true
+                }.invoke(
+                    null,
+                    listOf(
+                        "Lcooperation/plugin/c;",   //8.9.70
+                        "Lcooperation/plugin/PluginAdapterImpl;",   //8.8.50
+                        "Lbghq;",   //8.2.11 Play
+                        "Lbfdk;",   //8.2.6
+                        "Lavgk;",   //TIM 3.5.6
+                        "Lavel;",   //TIM 3.5.2
+                    ).firstNotNullOf { Initiator.load(it) }.newInstance()
+                    // implements Lcom/tencent/mobileqq/pluginsdk/IPluginAdapter;
+//                    DexKit.requireClassFromCache(CPluginAdapterImpl).newInstance()
+                )
+                Log.i("setProxy success")
+            }
+        } catch (e: Exception) {
+            traceError(e)
+        }
+        try {
+            val classLoader = m.invoke(null, hostInfo.application, pluginID) as ClassLoader
+            startHook(classLoader)
+        } catch (e: InvocationTargetException) {
+            traceError(e.targetException)
+        }
     }
 
     fun uiSwitchPreference(init: UiSwitchPreferenceItemFactory.() -> Unit): IUiItemAgent {
@@ -76,8 +111,8 @@ abstract class PluginDelayableHook(keyName: String) : BaseFunctionHook(keyName) 
         lateinit var title: String
         var summary: String? = null
 
-        override val titleProvider: (IUiItemAgent) -> String = { title }
-        override val summaryProvider: ((IUiItemAgent, Context) -> String?) = { _, _ -> summary }
+        override val titleProvider: (IEntityAgent) -> String = { title }
+        override val summaryProvider: ((IEntityAgent, Context) -> String?) = { _, _ -> summary }
         override val valueState: MutableStateFlow<String?>? = null
         override val validator: ((IUiItemAgent) -> Boolean) = { isAvailable }
         override val switchProvider: ISwitchCellAgent by lazy {
@@ -99,8 +134,8 @@ abstract class PluginDelayableHook(keyName: String) : BaseFunctionHook(keyName) 
         lateinit var title: String
         var summary: String? = null
 
-        override val titleProvider: (IUiItemAgent) -> String = { title }
-        override val summaryProvider: ((IUiItemAgent, Context) -> String?) = { _, _ -> summary }
+        override val titleProvider: (IEntityAgent) -> String = { title }
+        override val summaryProvider: ((IEntityAgent, Context) -> String?) = { _, _ -> summary }
         override val valueState: MutableStateFlow<String?>? = null
         override val validator: ((IUiItemAgent) -> Boolean) = { isAvailable }
         override val switchProvider: ISwitchCellAgent? = null
@@ -125,5 +160,7 @@ abstract class PluginDelayableHook(keyName: String) : BaseFunctionHook(keyName) 
         }
 
     }
+
+    override val runtimeErrorDependentComponents: List<RuntimeErrorTracer>? get() = null
 
 }

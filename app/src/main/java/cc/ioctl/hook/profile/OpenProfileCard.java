@@ -41,11 +41,12 @@ import androidx.annotation.Nullable;
 import androidx.appcompat.app.AlertDialog;
 import cc.ioctl.hook.misc.QSecO3AddRiskRequestMitigation;
 import cc.ioctl.util.Reflex;
+import io.github.qauxv.base.IEntityAgent;
 import io.github.qauxv.base.ISwitchCellAgent;
 import io.github.qauxv.base.IUiItemAgent;
-import io.github.qauxv.base.IUiItemAgentProvider;
 import io.github.qauxv.base.annotation.UiItemAgentEntry;
 import io.github.qauxv.dsl.FunctionEntryRouter.Locations.Auxiliary;
+import io.github.qauxv.hook.CommonClickableStaticFunctionItem;
 import io.github.qauxv.ui.CommonContextWrapper;
 import io.github.qauxv.util.Initiator;
 import io.github.qauxv.util.Log;
@@ -57,7 +58,7 @@ import kotlin.jvm.functions.Function3;
 import kotlinx.coroutines.flow.MutableStateFlow;
 
 @UiItemAgentEntry
-public class OpenProfileCard implements IUiItemAgent, IUiItemAgentProvider {
+public class OpenProfileCard extends CommonClickableStaticFunctionItem {
 
     public static final OpenProfileCard INSTANCE = new OpenProfileCard();
 
@@ -155,6 +156,10 @@ public class OpenProfileCard implements IUiItemAgent, IUiItemAgentProvider {
     }
 
     public static void openUserProfileCard(@NonNull Context ctx, long uin) {
+        openUserProfileCard(ctx, uin, 0);
+    }
+
+    public static void openUserProfileCard(@NonNull Context ctx, long uin, long troopUin) {
         try {
             QSecO3AddRiskRequestMitigation.INSTANCE.initialize();
         } catch (Exception | LinkageError e) {
@@ -162,10 +167,14 @@ public class OpenProfileCard implements IUiItemAgent, IUiItemAgentProvider {
         }
         try {
             Parcelable allInOne = (Parcelable) Reflex.newInstance(
-                    Initiator._AllInOne(), "" + uin, 35,
+                    Initiator._AllInOne(), "" + uin, troopUin != 0 ? 20 : 35,
                     String.class, int.class);
             Intent intent = new Intent(ctx, Initiator._FriendProfileCardActivity());
             intent.putExtra("AllInOne", allInOne);
+            if (troopUin != 0) {
+                intent.putExtra("memberUin", "" + uin);
+                intent.putExtra("troopUin", "" + troopUin);
+            }
             intent.putExtra(QSecO3AddRiskRequestMitigation.KEY_UIN_IS_FROM_VOID, true);
             ctx.startActivity(intent);
         } catch (Exception e) {
@@ -176,14 +185,8 @@ public class OpenProfileCard implements IUiItemAgent, IUiItemAgentProvider {
 
     @NonNull
     @Override
-    public Function1<IUiItemAgent, String> getTitleProvider() {
+    public Function1<IEntityAgent, String> getTitleProvider() {
         return (agent) -> "打开资料卡";
-    }
-
-    @Nullable
-    @Override
-    public Function2<IUiItemAgent, Context, CharSequence> getSummaryProvider() {
-        return null;
     }
 
     @Nullable

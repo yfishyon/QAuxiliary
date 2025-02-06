@@ -22,8 +22,11 @@
 
 package me.ketal.hook
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.method.LinkMovementMethod
@@ -32,32 +35,52 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+import android.view.ViewStub
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.AppCompatEditText
 import androidx.appcompat.widget.AppCompatTextView
 import androidx.appcompat.widget.SwitchCompat
+import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.constraintlayout.widget.ConstraintSet
+import androidx.core.view.children
 import cc.ioctl.hook.msg.FlashPicHook
 import cc.ioctl.util.LayoutHelper
 import cc.ioctl.util.Reflex
 import cc.ioctl.util.ui.FaultyDialog
-import de.robv.android.xposed.XC_MethodHook
+import com.github.kyuubiran.ezxhelper.utils.argTypes
+import com.github.kyuubiran.ezxhelper.utils.args
+import com.github.kyuubiran.ezxhelper.utils.invokeMethod
+import com.github.kyuubiran.ezxhelper.utils.newInstance
+import com.lxj.xpopup.util.XPopupUtils
+import com.tencent.qqnt.kernel.nativeinterface.MsgRecord
 import io.github.qauxv.R
 import io.github.qauxv.base.IUiItemAgent
 import io.github.qauxv.base.annotation.UiItemAgentEntry
 import io.github.qauxv.bridge.AIOUtilsImpl
+import io.github.qauxv.bridge.AppRuntimeHelper
+import io.github.qauxv.bridge.ntapi.MsgConstants
 import io.github.qauxv.config.ConfigManager
 import io.github.qauxv.core.HookInstaller
 import io.github.qauxv.dsl.FunctionEntryRouter
 import io.github.qauxv.hook.CommonConfigFunctionHook
 import io.github.qauxv.ui.CommonContextWrapper
+import io.github.qauxv.ui.CustomDialog
+import io.github.qauxv.util.QQVersion
+import io.github.qauxv.util.TIMVersion
 import io.github.qauxv.util.Toasts
+import io.github.qauxv.util.requireMinQQVersion
+import io.github.qauxv.util.requireMinTimVersion
+import io.github.qauxv.util.xpcompat.XC_MethodHook
 import kotlinx.coroutines.flow.MutableStateFlow
 import me.ketal.dispacher.BaseBubbleBuilderHook
 import me.ketal.dispacher.OnBubbleBuilder
 import me.singleneuron.data.MsgRecordData
+import xyz.nextalone.util.clazz
+import xyz.nextalone.util.findHostView
 import xyz.nextalone.util.method
 import java.lang.reflect.Method
 import java.text.SimpleDateFormat
@@ -78,8 +101,31 @@ object ChatItemShowQQUin : CommonConfigFunctionHook(), OnBubbleBuilder {
     private const val CFG_KEY_CUSTOM_MSG_FORMAT = "ChatItemShowQQUin.CFG_KEY_CUSTOM_MSG_FORMAT"
     private const val CFG_KEY_CUSTOM_TIME_FORMAT = "ChatItemShowQQUin.CFG_KEY_CUSTOM_TIME_FORMAT"
     private const val CFG_KEY_ENABLE_DETAIL_INFO = "ChatItemShowQQUin.CFG_KEY_ENABLE_DETAIL_INFO"
+    private const val CFG_KEY_ENABLE_GRAY_BG = "ChatItemShowQQUin.CFG_KEY_ENABLE_GRAY_BG"
     private const val DEFAULT_MSG_FORMAT = "\${shmsgseq}   \${formatTime}"
     private const val DEFAULT_TIME_FORMAT = "yyyy-MM-dd HH:mm:ss"
+
+    // For NT
+    private const val ID_ADD_LAYOUT = 0x114515
+    private const val ID_ADD_TEXTVIEW = 0x114516
+
+    // X2J_APT <- ???Binding(com/tx/x2j/AioSenderBubbleTemplateBinding) <- AIOSenderBubbleTemplate
+    private val NAME_TAIL_LAYOUT = when {
+        requireMinQQVersion(QQVersion.QQ_8_9_90) -> "smi"
+        requireMinQQVersion(QQVersion.QQ_8_9_88) -> "slx"
+        requireMinQQVersion(QQVersion.QQ_8_9_85) -> "sih"
+        requireMinQQVersion(QQVersion.QQ_8_9_83) -> "shv"
+        requireMinQQVersion(QQVersion.QQ_8_9_80) -> "sg6"
+        requireMinQQVersion(QQVersion.QQ_8_9_78) -> "s_8"
+        requireMinQQVersion(QQVersion.QQ_8_9_75) -> "s_l"
+        requireMinQQVersion(QQVersion.QQ_8_9_73) -> "s8p"
+        requireMinQQVersion(QQVersion.QQ_8_9_70) -> "s55"
+        requireMinQQVersion(QQVersion.QQ_8_9_68) -> "s3o"
+        else -> "rzs"
+    }
+
+    private val constraintSetClz by lazy { "androidx.constraintlayout.widget.ConstraintSet".clazz!! }
+    private val constraintLayoutClz by lazy { "androidx.constraintlayout.widget.ConstraintLayout".clazz!! }
 
     override val valueState: MutableStateFlow<String?> by lazy {
         MutableStateFlow(if (isEnabled) "已开启" else "禁用")
@@ -107,10 +153,18 @@ object ChatItemShowQQUin : CommonConfigFunctionHook(), OnBubbleBuilder {
             ConfigManager.getDefaultConfig().putBoolean(CFG_KEY_ENABLE_DETAIL_INFO, value)
         }
 
+    private var mEnableGrayBg: Boolean
+        get() = ConfigManager.getDefaultConfig().getBooleanOrDefault(CFG_KEY_ENABLE_GRAY_BG, false)
+        set(value) {
+            ConfigManager.getDefaultConfig().putBoolean(CFG_KEY_ENABLE_GRAY_BG, value)
+        }
+
+    @SuppressLint("SetTextI18n")
     private fun showConfigDialog(ctx: Context) {
         val timeFormat = mCurrentTimeFormat
         val msgFormat = mCurrentMsgFormat
         val enableDetailInfo = mEnableDetailInfo
+        val enableGrayBg = mEnableGrayBg
         val currEnabled = isEnabled
         val availablePlaceholders: Array<String> = arrayOf(
             "\${senderuin}", "\${frienduin}", "\${msgtype}", "\${readableMsgType}", "\${extraflag}", "\${extStr}",
@@ -126,6 +180,11 @@ object ChatItemShowQQUin : CommonConfigFunctionHook(), OnBubbleBuilder {
             isChecked = enableDetailInfo
             textSize = 16f
             text = "点击显示消息详细信息"
+        }
+        val grayBgSwitch = SwitchCompat(ctx).apply {
+            isChecked = enableGrayBg
+            textSize = 16f
+            text = "启用显示灰色圆角背景"
         }
         val tvMsgFmt: EditText = AppCompatEditText(ctx).apply {
             setText(msgFormat)
@@ -170,6 +229,7 @@ object ChatItemShowQQUin : CommonConfigFunctionHook(), OnBubbleBuilder {
             }
             addView(funcSwitch, lp)
             addView(detailInfoSwitch, lp)
+            addView(grayBgSwitch, lp)
             TextView(ctx).apply {
                 text = "消息格式"
                 textSize = 12f
@@ -199,6 +259,7 @@ object ChatItemShowQQUin : CommonConfigFunctionHook(), OnBubbleBuilder {
                     valueState.value = if (newEnabled) "已开启" else "禁用"
                 }
                 mEnableDetailInfo = detailInfoSwitch.isChecked
+                mEnableGrayBg = grayBgSwitch.isChecked
                 mCurrentMsgFormat = tvMsgFmt.text.toString()
                 mCurrentTimeFormat = tvTimeFmt.text.toString()
                 if (!isInitialized && isEnabled) {
@@ -217,22 +278,7 @@ object ChatItemShowQQUin : CommonConfigFunctionHook(), OnBubbleBuilder {
         try {
             val msg = AIOUtilsImpl.getChatMessage(it)!!
             val chatMessage = MsgRecordData(msg)
-            val ctx = CommonContextWrapper.createAppCompatContext(it.context)
-            val text = AppCompatTextView(ctx).apply {
-                text = chatMessage.msgRecord.toString()
-                textSize = 16f
-                setTextIsSelectable(true)
-                isVerticalScrollBarEnabled = true
-                setTextColor(ctx.resources.getColor(R.color.firstTextColor, ctx.theme))
-                val dp24 = LayoutHelper.dip2px(ctx, 24f)
-                setPadding(dp24, 0, dp24, 0)
-            }
-            AlertDialog.Builder(ctx)
-                .setTitle(Reflex.getShortClassName(chatMessage.msgRecord))
-                .setView(text)
-                .setCancelable(true)
-                .setPositiveButton("确认", null)
-                .show()
+            showDetailInfoDialog(it.context, Reflex.getShortClassName(chatMessage.msgRecord), chatMessage.msgRecord.toString())
         } catch (e: Exception) {
             FaultyDialog.show(it.context, e)
         }
@@ -284,9 +330,234 @@ object ChatItemShowQQUin : CommonConfigFunctionHook(), OnBubbleBuilder {
         pfnSetTailMessage.invoke(rootView, true, text, if (mEnableDetailInfo) mOnTailMessageClickListener else null)
     }
 
+    private fun formatTailMessageNt(chatMessage: MsgRecord): String {
+        // TODO NT数据类型换血
+        val msgFmt = mCurrentMsgFormat
+        val timeFmt = mCurrentTimeFormat
+        var formatTime = ""
+        if (msgFmt.contains("\${formatTime}")) {
+            if (mDataFormatter == null) {
+                mDataFormatter = SimpleDateFormat(timeFmt, Locale.ROOT)
+            }
+            formatTime = mDataFormatter!!.format(Date(chatMessage.msgTime * 1000L))
+        }
+        return msgFmt
+            .replace("\${senderuin}", chatMessage.senderUin.toString())
+            .replace("\${frienduin}", chatMessage.peerUin.toString())
+            .replace("\${msgtype}", chatMessage.msgType.toString())
+            .replace("\${readableMsgType}", "")
+            .replace("\${extraflag}", "")
+            .replace("\${extStr}", "")
+            .replace("\${formatTime}", formatTime)
+            .replace("\${time}", chatMessage.msgTime.toString())
+            .replace("\${msg}", chatMessage.elements.joinToString { it.toString() })
+            .replace("\${istroop}", "")
+            .replace("\${issend}", chatMessage.sendStatus.toString())
+            .replace("\${isread}", "")
+            .replace("\${msgUid}", "")
+            .replace("\${shmsgseq}", chatMessage.msgSeq.toString())
+            .replace("\${uniseq}", "")
+            .replace("\${simpleName}", chatMessage.javaClass.simpleName)
+    }
+
+    private fun shouldShowTailMsgForMsgRecord(chatMessage: MsgRecord): Boolean {
+        // do not show tail message for grey tips
+        return chatMessage.msgType != MsgConstants.MSG_TYPE_GRAY_TIPS
+    }
+
+    @SuppressLint("ResourceType", "SetTextI18n")
+    override fun onGetViewNt(rootView: ViewGroup, chatMessage: MsgRecord, param: XC_MethodHook.MethodHookParam) {
+        // 因为tailMessage是自己添加的，所以闪照文字也放这里处理
+        val isFlashPicTagNeedShow = FlashPicHook.INSTANCE.isInitializationSuccessful && isFlashPicNt(chatMessage)
+        if (!isEnabled && !isFlashPicTagNeedShow) return
+
+        if (requireMinQQVersion(QQVersion.QQ_8_9_63_BETA_11345) || requireMinTimVersion(TIMVersion.TIM_4_0_95_BETA)) {
+            if (!rootView.children.map { it.id }.contains(ID_ADD_LAYOUT)) {
+                val layout = LinearLayout(rootView.context).apply {
+                    layoutParams = ConstraintLayout.LayoutParams(
+                        0 /* MATCH_CONSTRAINT */,
+                        ConstraintLayout.LayoutParams.WRAP_CONTENT
+                    )
+                    id = ID_ADD_LAYOUT
+                    if (mEnableGrayBg) {
+                        val drawable = GradientDrawable()
+                        drawable.shape = GradientDrawable.RECTANGLE
+                        drawable.setColor(Color.BLACK)
+                        drawable.cornerRadius = 10f
+                        drawable.alpha = 0x22
+                        background = drawable
+
+                        val _4 = XPopupUtils.dp2px(rootView.context, 4f)
+                        val _6 = XPopupUtils.dp2px(rootView.context, 6f)
+                        setPadding(_6, _4, _6, _4)
+                    }
+                }
+
+                val textView = TextView(rootView.context).apply {
+                    id = ID_ADD_TEXTVIEW
+                    textSize = 12f
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    )
+                    if (mEnableGrayBg) setTextColor(Color.WHITE)
+                    setOnClickListener {
+                        if (!mEnableDetailInfo) return@setOnClickListener
+                        val msgRecord = it.tag as MsgRecord
+                        showDetailInfoDialog(rootView.context, Reflex.getShortClassName(msgRecord), msgRecord.toString())
+                    }
+                }
+                layout.addView(textView)
+                rootView.addView(layout)
+
+                val constraintSet = constraintSetClz.newInstance(args())!!
+                constraintSet.invokeMethod("clone", args(rootView), argTypes(constraintLayoutClz))
+                val i_msg = rootView.children.indexOfFirst { it is LinearLayout && it.id != View.NO_ID }
+                val id_msg = rootView.getChildAt(i_msg).id
+                val id_name = rootView.getChildAt(i_msg - 1).id
+                constraintSet.invokeMethod(
+                    "connect",
+                    args(ID_ADD_LAYOUT, ConstraintLayout.LayoutParams.TOP, id_msg, ConstraintLayout.LayoutParams.BOTTOM, 0),
+                    argTypes(Int::class.java, Int::class.java, Int::class.java, Int::class.java, Int::class.java)
+                )
+                if (chatMessage.senderUin != AppRuntimeHelper.getLongAccountUin()) {
+                    constraintSet.invokeMethod(
+                        "connect",
+                        args(ID_ADD_LAYOUT, ConstraintSet.LEFT, id_name, ConstraintSet.LEFT),
+                        argTypes(Int::class.java, Int::class.java, Int::class.java, Int::class.java)
+                    )
+                    if (chatMessage.chatType == 1) {
+                        // 调整私聊显示边距
+                        constraintSet.invokeMethod(
+                            "setMargin",
+                            args(ID_ADD_LAYOUT, ConstraintSet.START, XPopupUtils.dp2px(rootView.context, 10f)),
+                            argTypes(Int::class.java, Int::class.java, Int::class.java)
+                        )
+                    } else if (chatMessage.chatType == 2 && chatMessage.msgType == MsgConstants.MSG_TYPE_FILE) {
+                        // 调整群聊文件边距
+                        constraintSet.invokeMethod(
+                            "setMargin",
+                            args(ID_ADD_LAYOUT, ConstraintSet.START, XPopupUtils.dp2px(rootView.context, 55f)),
+                            argTypes(Int::class.java, Int::class.java, Int::class.java)
+                        )
+                    }
+                } else {
+                    constraintSet.invokeMethod(
+                        "connect",
+                        args(ID_ADD_LAYOUT, ConstraintSet.RIGHT, id_name, ConstraintSet.RIGHT),
+                        argTypes(Int::class.java, Int::class.java, Int::class.java, Int::class.java)
+                    )
+                    if (chatMessage.chatType == 1) {
+                        // 调整私聊显示边距
+                        constraintSet.invokeMethod(
+                            "setMargin",
+                            args(ID_ADD_LAYOUT, ConstraintSet.END, XPopupUtils.dp2px(rootView.context, 10f)),
+                            argTypes(Int::class.java, Int::class.java, Int::class.java)
+                        )
+                    }
+                }
+                constraintSet.invokeMethod("applyTo", args(rootView), argTypes(constraintLayoutClz))
+            }
+
+            val layout = rootView.findViewById<LinearLayout>(ID_ADD_LAYOUT)
+            val textView = rootView.findViewById<TextView>(ID_ADD_TEXTVIEW)
+
+            if (isFlashPicTagNeedShow || shouldShowTailMsgForMsgRecord(chatMessage)) {
+                layout.visibility = View.VISIBLE
+                textView.visibility = View.VISIBLE
+                textView.let {
+                    it.tag = chatMessage
+                    it.text = (if (isFlashPicTagNeedShow) "闪照 " else "") + (if (isEnabled) formatTailMessageNt(chatMessage) else "")
+                }
+            } else {
+                layout.visibility = View.GONE
+                textView.visibility = View.GONE
+            }
+
+            return
+        }
+
+//        Log.d("rootView: $rootView")
+        val tailLayout = try {
+            val v = rootView.findHostView<FrameLayout>(NAME_TAIL_LAYOUT)
+            if (v == null) {
+//                Log.e("ChatItemShowQQUin tailLayout is null")
+                // dump root children
+//                rootView.children.forEach {
+//                    Log.e("[ERR]--> rootView child: $it")
+//                }
+                return
+            } else {
+//                rootView.children.forEach {
+//                    Log.e("[+++]--> rootView child: $it")
+//                }
+            }
+            v
+        } catch (_: Exception) {
+            val stub = rootView.findHostView<ViewStub>(NAME_TAIL_LAYOUT)!!
+            stub.inflate() as FrameLayout
+        }
+        // TODO: 2023-11-25 8.9.93 work around 使用和 "群文件" 同一个 FrameLayout
+        // 因为先前用的 view 在 8.9.93 只在自己发的消息存在，不是自己发的消息上连 view 都没有
+        tailLayout.visibility = View.VISIBLE
+        // Log.d("ChatItemShowQQUin tailLayout: $tailLayout, msg: $chatMessage")
+        if (!tailLayout.children.map { it.id }.contains(ID_ADD_LAYOUT)) {
+            val layout = LinearLayout(rootView.context).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    marginStart = XPopupUtils.dp2px(rootView.context, 15f)
+                    // 因为tailLayout是FrameLayout，所以继承了会和原消息tailMessage重叠的特性
+                }
+                // 灰色背景不想搞了，弄圆角麻烦
+                id = ID_ADD_LAYOUT
+            }
+            val textView = TextView(rootView.context).apply {
+                id = ID_ADD_TEXTVIEW
+                textSize = 12f
+                setOnClickListener {
+                    // 或者不用tag，像上面mOnTailMessageClickListener一样通过view获取message
+                    // Dialog细节没有考虑，MsgRecord里面的冗余内容很多，可考虑格式化/选择性展示
+                    if (!mEnableDetailInfo) return@setOnClickListener
+                    val msgRecord = it.tag as MsgRecord
+                    showDetailInfoDialog(rootView.context, Reflex.getShortClassName(msgRecord), msgRecord.toString())
+                }
+            }
+            layout.addView(textView)
+            tailLayout.addView(layout)
+        }
+
+        rootView.findViewById<TextView>(ID_ADD_TEXTVIEW).let {
+            it.tag = chatMessage
+            it.text = (if (isFlashPicTagNeedShow) "闪照 " else "") + (if (isEnabled) formatTailMessageNt(chatMessage) else "")
+        }
+    }
+
     private fun isFlashPic(chatMessage: MsgRecordData): Boolean {
         val msgtype = chatMessage.msgType
         return (msgtype == -2000 || msgtype == -2006) &&
             chatMessage.getExtInfoFromExtStr("commen_flash_pic").isNotEmpty()
+    }
+
+    private fun isFlashPicNt(chatMessage: MsgRecord): Boolean {
+        return chatMessage.javaClass.getDeclaredField("subMsgType").run {
+            isAccessible = true
+            val subMsgType = getInt(chatMessage)
+            subMsgType == 8194 || subMsgType == 12288
+        }
+    }
+
+    private fun showDetailInfoDialog(context: Context, title: String, msg: String) {
+        val ctx = CommonContextWrapper.createAppCompatContext(context)
+        CustomDialog.createFailsafe(ctx)
+            .setTitle(title)
+            .setMessage(msg)
+            .setCancelable(true)
+            .setPositiveButton("确定", null)
+            .show()
+            .apply {
+                findViewById<TextView>(android.R.id.message).setTextIsSelectable(true)
+            }
     }
 }

@@ -4,19 +4,18 @@
  * https://github.com/cinit/QAuxiliary
  *
  * This software is non-free but opensource software: you can redistribute it
- * and/or modify it under the terms of the GNU Affero General Public License
- * as published by the Free Software Foundation; either
- * version 3 of the License, or any later version and our eula as published
+ * and/or modify it under the terms of the qwq233 Universal License
+ * as published on https://github.com/qwq233/license; either
+ * version 2 of the License, or any later version and our EULA as published
  * by QAuxiliary contributors.
  *
  * This software is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Affero General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See the qwq233 Universal License for more details.
  *
- * You should have received a copy of the GNU Affero General Public License
- * and eula along with this software.  If not, see
- * <https://www.gnu.org/licenses/>
+ * See
+ * <https://github.com/qwq233/license>
  * <https://github.com/cinit/QAuxiliary/blob/master/LICENSE.md>.
  */
 
@@ -36,10 +35,11 @@ import android.widget.ImageButton;
 import android.widget.RelativeLayout;
 import cc.hicore.QApp.QAppUtils;
 import cc.hicore.ReflectUtil.MField;
-import cc.hicore.ReflectUtil.MMethod;
+import cc.hicore.ReflectUtil.XField;
+import cc.hicore.ReflectUtil.XMethod;
 import cc.hicore.dialog.RepeaterPlusIconSettingDialog;
 import cc.ioctl.util.LayoutHelper;
-import de.robv.android.xposed.XC_MethodHook;
+import io.github.qauxv.util.xpcompat.XC_MethodHook;
 import io.github.qauxv.R;
 import io.github.qauxv.util.CustomMenu;
 import io.github.qauxv.util.LicenseStatus;
@@ -75,12 +75,12 @@ public class RepeaterHelper {
 
     public static void createRepeatIcon(RelativeLayout baseChatItem, Object ChatMsg, Object session) throws Exception {
         boolean isSendFromLocal;
-        int istroop = MField.GetField(ChatMsg, "istroop", int.class);
+        int istroop = XField.obj(ChatMsg).name("istroop").type(int.class).get();
         if (istroop == 1 || istroop == 0) {
-            String UserUin = MField.GetField(ChatMsg, "senderuin", String.class);
+            String UserUin = XField.obj(ChatMsg).name("senderuin").type(String.class).get();
             isSendFromLocal = UserUin.equals(QAppUtils.getCurrentUin());
         } else {
-            isSendFromLocal = MMethod.CallMethodNoParam(ChatMsg, "isSendFromLocal", boolean.class);
+            isSendFromLocal = XMethod.obj(ChatMsg).name("isSendFromLocal").ret( boolean.class).invoke();
         }
 
         Context context = baseChatItem.getContext();
@@ -170,9 +170,9 @@ public class RepeaterHelper {
     }
     private static boolean checkIsAvailStruct(Object msg) throws Exception {
         if (msg.getClass().getSimpleName().equals("MessageForStructing")) {
-            Object struct = MField.GetField(msg, "structingMsg");
+            Object struct = XField.obj(msg).name( "structingMsg").get();
             if (struct != null) {
-                int id = MField.GetField(struct, "mMsgServiceID");
+                int id = XField.obj(struct).name("mMsgServiceID").get();
                 return id == 5;
             }
             return false;

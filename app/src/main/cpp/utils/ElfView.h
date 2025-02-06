@@ -1,86 +1,115 @@
 //
 // Created by kinit on 2021-10-25.
 //
+// This file(ElfView.h) is licensed under the Apache License 2.0.
 
 #ifndef NATIVES_ELFVIEW_H
 #define NATIVES_ELFVIEW_H
 
+#include <cstddef>
 #include <cstdint>
+#include <string_view>
 #include <vector>
+#include <span>
+#include <string>
+#include <vector>
+#include <memory>
 // do not #include <elf.h> here, too many macros
-
-#include "utils/MemoryBuffer.h"
 
 namespace utils {
 
 class ElfView {
 public:
-    using ElfInfo = struct {
-        const uint8_t* handle;
-        const void* ehdr;
-        const void* phdr;
-        const void* shdr;
-        const void* dyn;
-        uint32_t dyn_size;
-        const void* symtab;
-        uint32_t sym_size;
-        const void* relplt;
-        uint32_t relplt_size;
-        const void* reldyn;
-        bool use_rela;
-        uint32_t reldyn_size;
-        const void* gnu_hash;
-        uint32_t nbucket;
-        uint32_t nchain;
-        const uint32_t* bucket;
-        const uint32_t* chain;
-        const char* shstr;
-        const char* symstr;
+
+    enum class ElfClass {
+        kNone = 0,
+        kElf32 = 1,
+        kElf64 = 2,
     };
 
-    static constexpr int ARCH_X86 = 3;
-    static constexpr int ARCH_X86_64 = 62;
-    static constexpr int ARCH_ARM = 40;
-    static constexpr int ARCH_AARCH64 = 183;
+    class ElfInfo;
+
 private:
-    MemoryBuffer mMemoryBuffer{nullptr, 0};
-    int mPointerSize = 0;
-    int mArchitecture = 0;
+    bool mIsValid = false;
+    bool mIsLoaded = false;
+    std::unique_ptr<ElfInfo> mElfInfo;
 
 public:
-    void attachFileMemMapping(void* address, size_t size);
+    ElfView();
 
-    [[nodiscard]] bool isValid() const noexcept {
-        return mPointerSize != 0;
+    ~ElfView() noexcept;
+
+    // no copy, no assign
+    ElfView(const ElfView&) = delete;
+    ElfView& operator=(const ElfView&) = delete;
+
+    void ParseFileMemMapping(std::span<const uint8_t> fileMap) noexcept;
+
+    inline void ParseFileMemMapping(const void* address, size_t length) noexcept {
+        ParseFileMemMapping(std::span<const uint8_t>((const uint8_t*) address, length));
     }
 
-    inline void detach() {
-        mMemoryBuffer = {nullptr, 0};
-        mPointerSize = 0;
-        mArchitecture = 0;
+    void ParseLoadedMemoryView(std::span<const uint8_t> memory);
+
+    inline void ParseLoadedMemoryView(const void* address, size_t length) {
+        ParseLoadedMemoryView(std::span<const uint8_t>((const uint8_t*) address, length));
     }
 
-    [[nodiscard]] inline int getPointerSize() const noexcept {
-        return mPointerSize;
-    }
+    [[nodiscard]] bool IsValid() const noexcept;
 
-    [[nodiscard]] inline int getArchitecture() const noexcept {
-        return mArchitecture;
-    }
+    void Detach() noexcept;
 
-    [[nodiscard]] int getElfInfo(ElfInfo& info) const;
+    [[nodiscard]] int GetPointerSize() const noexcept;
+
+    [[nodiscard]] uint8_t GetElfClass() const noexcept;
 
     /**
-     * @return -1 if not found
+     * Get the ELF machine type.
+     * @return the machine type, or 0 if elf is invalid.
      */
-    [[nodiscard]] int getSymbolIndex(const char* symbol) const;
+    [[nodiscard]] uint16_t GetArchitecture() const noexcept;
 
     /**
-     * @return 0 if not found
+     * Get the load bias of the elf file. Typically, you don't need to use this value.
+     * @return the load bias of the elf file.
      */
-    [[nodiscard]] int getSymbolAddress(const char* symbol) const;
+    [[nodiscard]] uint64_t GetLoadBias() const noexcept;
 
-    [[nodiscard]] std::vector<uint64_t> getExtSymGotRelVirtAddr(const char* symbol) const;
+    [[nodiscard]] size_t GetLoadedSize() const noexcept;
+
+    /**
+     * Get the soname of the elf file.
+     * @return may be empty string.
+     */
+    [[nodiscard]] const std::string& GetSoname() const noexcept;
+
+    /**
+     * Find a symbol in the elf file.
+     * It will search the dynamic symbol table first, then the debug symbol table, then the mini debug info.
+     * @param symbol the name of the symbol.
+     * @return offset relative to the base address of the elf image, or 0 if not found.
+     */
+    [[nodiscard]] uint64_t GetSymbolOffset(std::string_view symbol) const;
+
+    /**
+     * Just like GetSymbolOffset, but return the first symbol offset with the given prefix.
+     * @param symbolPrefix the prefix of the symbol.
+     * @return the offset of the symbol, or 0 if not found.
+     */
+    [[nodiscard]] uint64_t GetFirstSymbolOffsetWithPrefix(std::string_view symbolPrefix) const;
+
+    /**
+     * Find the offset of a symbol in the GOT table.
+     * @param symbol the name of the symbol.
+     * @return a vector of offsets, may be empty.
+     */
+    [[nodiscard]] std::vector<uint64_t> GetSymbolGotOffset(std::string_view symbol) const;
+
+private:
+    void ParseMiniDebugInfo(std::span<const uint8_t> input);
+
+    static void ParseDebugSymbol(std::span<const uint8_t> input, ElfInfo* pInfo, bool isMiniDebugInfo);
+
 };
 
 }

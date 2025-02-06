@@ -6,14 +6,16 @@ import java.util.Properties
 object Version {
     val java = JavaVersion.VERSION_11
 
-    const val compileSdkVersion = 33
+    const val compileSdkVersion = 35
     val buildToolsVersion = findBuildToolsVersion()
     const val minSdk = 24
-    const val targetSdk = 33
-    const val versionName = "1.4.1"
+    const val targetSdk = 35
+    const val versionName = "1.5.6"
 
-    private const val defaultNdkVersion = "25.1.8937393"
-    private const val defaultCMakeVersion = "3.22.1"
+    private const val defaultNdkVersion = "27.0.12077973"
+
+    // LSPlant requires CMake 3.28.0+ to build
+    private const val defaultCMakeVersion = "3.31.0"
 
     fun getNdkVersion(project: Project): String {
         val prop = getLocalProperty(project, "qauxv.override.ndk.version")
@@ -33,7 +35,16 @@ object Version {
         return prop ?: env ?: defaultCMakeVersion
     }
 
-    private fun getLocalProperty(project: Project, propertyName: String): String? {
+    fun getNinjaPathOrNull(project: Project): String? {
+        val prop = getLocalProperty(project, "qauxv.override.ninja.path")
+        val env = getEnvVariable("QAUXV_OVERRIDE_NINJA_PATH")
+        if (!prop.isNullOrEmpty() && !env.isNullOrEmpty()) {
+            throw IllegalStateException("Cannot set both QAUXV_OVERRIDE_NINJA_PATH and qauxv.override.ninja.path")
+        }
+        return prop ?: env
+    }
+
+    fun getLocalProperty(project: Project, propertyName: String): String? {
         val rootProject = project.rootProject
         val localProp = File(rootProject.projectDir, "local.properties")
         if (!localProp.exists()) {
@@ -51,8 +62,9 @@ object Version {
     }
 
     private fun findBuildToolsVersion(): String {
-        val defaultBuildToolsVersion = "33.0.2" // 33.0.0 AIDL is broken on Windows
-        return File(System.getenv("ANDROID_HOME"), "build-tools").listFiles()?.filter { it.isDirectory }?.maxOfOrNull { it.name }?.also { println("Using build tools version $it") }
+        val defaultBuildToolsVersion = "35.0.0" // AGP 8.2.0 need Build Tools 34.0.0
+        return File(System.getenv("ANDROID_HOME"), "build-tools").listFiles()?.filter { it.isDirectory }?.maxOfOrNull { it.name }
+            ?.also { println("Using build tools version $it") }
             ?: defaultBuildToolsVersion
     }
 }

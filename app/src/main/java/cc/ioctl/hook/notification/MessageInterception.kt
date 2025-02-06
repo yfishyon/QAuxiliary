@@ -24,29 +24,42 @@ package cc.ioctl.hook.notification
 
 import cc.ioctl.util.Reflex
 import cc.ioctl.util.msg.MessageManager
-import de.robv.android.xposed.XC_MethodHook
+import cc.ioctl.util.msg.MessageReceiver
+import cn.lliiooll.hook.AntiRobotMessage
+import io.github.qauxv.base.annotation.EntityAgentEntry
 import io.github.qauxv.base.annotation.FunctionHookEntry
-import io.github.qauxv.hook.BasePersistBackgroundHook
+import io.github.qauxv.hook.BaseHookDispatcher
 import io.github.qauxv.util.Initiator
 import io.github.qauxv.util.QQVersion
 import io.github.qauxv.util.hostInfo
 import io.github.qauxv.util.requireMinQQVersion
+import io.github.qauxv.util.xpcompat.XC_MethodHook
 import me.singleneuron.data.MsgRecordData
+import me.singleneuron.hook.decorator.RegexAntiMeg
 import xyz.nextalone.util.clazz
 import xyz.nextalone.util.hookAfter
 import xyz.nextalone.util.method
 import xyz.nextalone.util.methodWithSuper
 import xyz.nextalone.util.throwOrTrue
 
+@EntityAgentEntry
 @FunctionHookEntry
-object MessageInterception : BasePersistBackgroundHook() {
+object MessageInterception : BaseHookDispatcher<MessageReceiver>(arrayOf()) {
+
+    override val decorators: Array<MessageReceiver> = arrayOf(
+        // 在这里添加消息处理
+        RegexAntiMeg,
+        AntiMessage,
+        AntiRobotMessage,
+    )
+
     override fun initOnce() = throwOrTrue {
         val callback: (XC_MethodHook.MethodHookParam) -> Unit = { param ->
             val msgRecordData = MsgRecordData(param.args[0])
             MessageManager.call(msgRecordData)
         }
         if (hostInfo.versionCode >= QQVersion.QQ_8_8_80) {
-            // i don't know why hook 3 methods, but it works
+            // I don't know why hook 3 methods, but it works
             // I don't know why they should be null-tolerant, but the previous version was
             Reflex.findSingleMethod(
                 Initiator._C2CMessageManager(),
@@ -67,8 +80,11 @@ object MessageInterception : BasePersistBackgroundHook() {
                 Int::class.java
             ).hookAfter(this, callback)
             // I don't know what will the 3rd method do
+            // updateMsgTab
             Initiator._C2CMessageManager().methodWithSuper(
                 when {
+                    requireMinQQVersion(QQVersion.QQ_9_0_56) -> "x0"
+                    requireMinQQVersion(QQVersion.QQ_8_9_63_BETA_11345) -> "y0"
                     requireMinQQVersion(QQVersion.QQ_8_9_3) -> "E0"
                     requireMinQQVersion(QQVersion.QQ_8_8_93) -> "A0"
                     else -> "d"

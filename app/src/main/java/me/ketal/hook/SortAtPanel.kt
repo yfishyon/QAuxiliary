@@ -25,7 +25,7 @@ import cc.ioctl.util.Reflex.getFirstByType
 import com.github.kyuubiran.ezxhelper.utils.getObjectByTypeAs
 import com.github.kyuubiran.ezxhelper.utils.hookAfter
 import com.github.kyuubiran.ezxhelper.utils.paramCount
-import de.robv.android.xposed.XposedHelpers
+import io.github.qauxv.util.xpcompat.XposedHelpers
 import io.github.qauxv.base.annotation.FunctionHookEntry
 import io.github.qauxv.base.annotation.UiItemAgentEntry
 import io.github.qauxv.dsl.FunctionEntryRouter
@@ -89,8 +89,8 @@ object SortAtPanel : CommonSwitchFunctionHook(
         }
 
         // for NT QQ 8.9.68.11450
-        val clazz = Initiator.load("com.tencent.mobileqq.aio.input.at.business.AIOAtSelectMemberUseCase")
-        for (m in clazz?.declaredMethods!!) {
+        val clazz = Initiator.load("com.tencent.mobileqq.aio.input.at.business.AIOAtSelectMemberUseCase") ?: return@throwOrTrue
+        for (m in clazz.declaredMethods) {
             if (m.paramCount == 1 && m.returnType == Map::class.java && m.parameterTypes[0] == List::class.java) {
                 m.hookAfter {
                     val backMap = it.result as Map<String, List<Any>>

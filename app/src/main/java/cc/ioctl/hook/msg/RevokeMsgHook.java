@@ -21,8 +21,8 @@
  */
 package cc.ioctl.hook.msg;
 
-import static de.robv.android.xposed.XposedHelpers.callMethod;
-import static de.robv.android.xposed.XposedHelpers.setObjectField;
+import static io.github.qauxv.util.xpcompat.XposedHelpers.callMethod;
+import static io.github.qauxv.util.xpcompat.XposedHelpers.setObjectField;
 import static io.github.qauxv.util.Initiator._C2CMessageProcessor;
 import static io.github.qauxv.util.Initiator._QQMessageFacade;
 
@@ -33,14 +33,16 @@ import android.text.TextUtils;
 import android.view.View;
 import androidx.annotation.Keep;
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import cc.hicore.QApp.QAppUtils;
 import cc.ioctl.fragment.RevokeMsgConfigFragment;
 import cc.ioctl.util.HookUtils;
 import cc.ioctl.util.HostInfo;
 import cc.ioctl.util.Reflex;
-import com.tencent.qqnt.kernel.nativeinterface.Contact;
-import com.tencent.qqnt.kernel.nativeinterface.IKernelMsgService;
-import com.tencent.qqnt.kernel.nativeinterface.JsonGrayElement;
+import com.google.protobuf.ByteString;
+import com.google.protobuf.InvalidProtocolBufferException;
 import com.tencent.qqnt.kernel.nativeinterface.MsgRecord;
+import io.github.qauxv.util.xpcompat.XC_MethodHook;
 import io.github.qauxv.activity.SettingsUiFragmentHostActivity;
 import io.github.qauxv.base.IUiItemAgent;
 import io.github.qauxv.base.annotation.FunctionHookEntry;
@@ -49,6 +51,8 @@ import io.github.qauxv.bridge.AppRuntimeHelper;
 import io.github.qauxv.bridge.ContactUtils;
 import io.github.qauxv.bridge.QQMessageFacade;
 import io.github.qauxv.bridge.RevokeMsgInfoImpl;
+import io.github.qauxv.bridge.kernelcompat.ContactCompat;
+import io.github.qauxv.bridge.kernelcompat.KernelMsgServiceCompat;
 import io.github.qauxv.bridge.ntapi.ChatTypeConstants;
 import io.github.qauxv.bridge.ntapi.MsgServiceHelper;
 import io.github.qauxv.bridge.ntapi.NtGrayTipHelper;
@@ -56,6 +60,14 @@ import io.github.qauxv.bridge.ntapi.RelationNTUinAndUidApi;
 import io.github.qauxv.config.ConfigManager;
 import io.github.qauxv.dsl.FunctionEntryRouter.Locations.Auxiliary;
 import io.github.qauxv.hook.CommonConfigFunctionHook;
+import io.github.qauxv.proto.trpc.msg.C2CMsgRecallOuterClass;
+import io.github.qauxv.proto.trpc.msg.ContentHeadOuterClass;
+import io.github.qauxv.proto.trpc.msg.GroupMsgRecallOuterClass;
+import io.github.qauxv.proto.trpc.msg.InfoSyncPushOuterClass;
+import io.github.qauxv.proto.trpc.msg.MessageBodyOuterClass;
+import io.github.qauxv.proto.trpc.msg.MessageOuterClass;
+import io.github.qauxv.proto.trpc.msg.MsgPushOuterClass;
+import io.github.qauxv.util.Initiator;
 import io.github.qauxv.util.Log;
 import io.github.qauxv.util.QQVersion;
 import io.github.qauxv.util.SyncUtils;
@@ -64,12 +76,19 @@ import io.github.qauxv.util.dexkit.DexKit;
 import io.github.qauxv.util.dexkit.DexKitTarget;
 import io.github.qauxv.util.dexkit.NContactUtils_getBuddyName;
 import io.github.qauxv.util.dexkit.NContactUtils_getDiscussionMemberShowName;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Random;
+import java.util.Set;
 import kotlin.Unit;
+import kotlin.collections.ArraysKt;
 import kotlin.jvm.functions.Function3;
 import kotlin.jvm.internal.Intrinsics;
 import kotlinx.coroutines.flow.MutableStateFlow;
@@ -86,6 +105,10 @@ import mqq.app.AppRuntime;
  * 2020/04/08 Tue.23:21 Use RevokeMsgInfoImpl for ease, wanna cry
  * <p>
  * 2023-06-16 Fri.12:40 Initial support for NT kernel.
+ * <p>
+ * 2023-07-12 Mon.23:12 Basic support for NT kernel.
+ * <p>
+ * 2024-07-17 Wed.22:03 Use ProtoBuf to get recall info.
  */
 @FunctionHookEntry
 @UiItemAgentEntry
@@ -97,6 +120,8 @@ public class RevokeMsgHook extends CommonConfigFunctionHook {
     private MutableStateFlow<String> mState = null;
     private static final String KEY_KEEP_SELF_REVOKE_MSG = "RevokeMsgHook.KEY_KEEP_SELF_REVOKE_MSG";
     private static final String KEY_SHOW_SHMSGSEQ = "RevokeMsgHook.KEY_SHOW_SHMSGSEQ";
+
+    private static final byte[] EMPTY_BYTE_ARRAY = new byte[0];
 
     private RevokeMsgHook() {
         //FIXME: is MSF really necessary?
@@ -177,13 +202,20 @@ public class RevokeMsgHook extends CommonConfigFunctionHook {
 
     @Override
     public boolean initOnce() throws Exception {
-        nativeInitNtKernelRecallMsgHook();
+        boolean isSuccess = true;
+        if (QAppUtils.isQQnt()) {
+            boolean p1 = nativeInitNtKernelRecallMsgHookV1p2();
+            boolean p2 = initNtRecallMsgHookV2();
+            isSuccess = p1 && p2;
+        }
+        // The method is still there, even on NT.
+        // I decided to hook them as long as they are there.
+        // There should only be one method with such signature.
         Method revokeMsg = null;
         for (Method m : _QQMessageFacade().getDeclaredMethods()) {
             if (m.getReturnType().equals(void.class)) {
                 Class<?>[] argt = m.getParameterTypes();
-                if (argt.length == 2 && argt[0].equals(ArrayList.class) && argt[1]
-                        .equals(boolean.class)) {
+                if (argt.length == 2 && argt[0].equals(ArrayList.class) && argt[1].equals(boolean.class)) {
                     revokeMsg = m;
                     break;
                 }
@@ -198,19 +230,237 @@ public class RevokeMsgHook extends CommonConfigFunctionHook {
             }
             for (Object revokeMsgInfo : list) {
                 try {
-                    onRevokeMsg(revokeMsgInfo);
+                    onRevokeMsgLegacy(revokeMsgInfo);
                 } catch (Exception | LinkageError | AssertionError t) {
                     traceError(t);
                 }
             }
             list.clear();
         });
+        return isSuccess;
+    }
+
+    private boolean initNtRecallMsgHookV2() throws ReflectiveOperationException {
+        Class<?> kIQQNTWrapperSessionProxy = Initiator.loadClass("com.tencent.qqnt.kernel.nativeinterface.IQQNTWrapperSession$CppProxy");
+        Method onMsfPushMethod = ArraysKt.single(kIQQNTWrapperSessionProxy.getDeclaredMethods(), method -> {
+            return "onMsfPush".equals(method.getName()) && (method.getParameterCount() == 3 || method.getParameterCount() == 2);
+        });
+        Class<?> kPushExtraInfo = null;
+        final Field transInfoMapField;
+        if (onMsfPushMethod.getParameterCount() == 3) {
+            kPushExtraInfo = onMsfPushMethod.getParameterTypes()[2];
+            transInfoMapField = kPushExtraInfo.getDeclaredField("transInfoMap");
+            transInfoMapField.setAccessible(true);
+        } else {
+            transInfoMapField = null;
+        }
+        HookUtils.hookBeforeIfEnabled(this, onMsfPushMethod, -51, param -> {
+            String cmd = (String) param.args[0];
+            if (cmd == null) {
+                return;
+            }
+            byte[] protoBuf = (byte[]) param.args[1];
+            if (protoBuf == null) {
+                protoBuf = EMPTY_BYTE_ARRAY;
+            }
+            HashMap<String, byte[]> transInfoMap = null;
+            if (transInfoMapField != null) {
+                Object pushExtraInfo = param.args[2];
+                if (pushExtraInfo != null) {
+                    transInfoMap = (HashMap<String, byte[]>) transInfoMapField.get(pushExtraInfo);
+                }
+            }
+            onMsfPushNtMethodCallback(param, cmd, protoBuf, transInfoMap);
+        });
         return true;
     }
 
-    private native boolean nativeInitNtKernelRecallMsgHook();
+    private void onMsfPushNtMethodCallback(@NonNull XC_MethodHook.MethodHookParam param, @NonNull String cmd,
+            @NonNull byte[] protoBuf, @Nullable HashMap<String, byte[]> transInfoMap) {
+        if ("trpc.msg.register_proxy.RegisterProxy.InfoSyncPush".equals(cmd)) {
+            handleRegisterProxyInfoSyncPush(param, protoBuf, transInfoMap);
+        } else if ("trpc.msg.olpush.OlPushService.MsgPush".equals(cmd)) {
+            handleOlPushServiceMsgPush(param, protoBuf, transInfoMap);
+        }
+    }
 
-    private void onRevokeMsg(Object revokeMsgInfo) throws Exception {
+    // trpc.msg.register_proxy.RegisterProxy.InfoSyncPush
+    private void handleRegisterProxyInfoSyncPush(
+            @NonNull XC_MethodHook.MethodHookParam param,
+            @NonNull byte[] protoBuf,
+            @Nullable HashMap<String, byte[]> transInfoMap
+    ) {
+        try {
+            InfoSyncPushOuterClass.InfoSyncPush infoSyncPush = InfoSyncPushOuterClass.InfoSyncPush.parseFrom(protoBuf);
+            if (!infoSyncPush.hasSyncMsgRecall()) {
+                return;
+            }
+            InfoSyncPushOuterClass.InfoSyncPush.SyncMsgRecall syncMsgRecall = infoSyncPush.getSyncMsgRecall();
+            List<InfoSyncPushOuterClass.InfoSyncPush.SyncMsgRecall.SyncInfoBody> msgRecalls = syncMsgRecall.getBodyList();
+            for (InfoSyncPushOuterClass.InfoSyncPush.SyncMsgRecall.SyncInfoBody msgRecall : msgRecalls) {
+                String peerUid = msgRecall.getPeerUid();
+                long groupCode;
+                try {
+                    groupCode = Long.parseLong(peerUid);
+                } catch (NumberFormatException e) {
+                    // not a group
+                    continue;
+                }
+                if (groupCode == 0) {
+                    continue;
+                }
+                List<MessageOuterClass.Message> msgs = msgRecall.getMsgList();
+                for (MessageOuterClass.Message msg : msgs) {
+                    handleCommonGroupMessageRecall(msg);
+                }
+            }
+        } catch (InvalidProtocolBufferException | ReflectiveOperationException e) {
+            traceError(e);
+        }
+    }
+
+    // trpc.msg.olpush.OlPushService.MsgPush
+    private void handleOlPushServiceMsgPush(@NonNull XC_MethodHook.MethodHookParam param,
+            @NonNull byte[] protoBuf, @Nullable HashMap<String, byte[]> transInfoMap) {
+        try {
+            MsgPushOuterClass.MsgPush msgPush = MsgPushOuterClass.MsgPush.parseFrom(protoBuf);
+            if (!msgPush.hasMessage()) {
+                return;
+            }
+            MessageOuterClass.Message message = msgPush.getMessage();
+            if (!message.hasBody() || !message.hasContentHead()) {
+                return;
+            }
+            ContentHeadOuterClass.ContentHead contentHead = message.getContentHead();
+            int type = contentHead.getType();
+            int subType = contentHead.getSubType();
+            // c2c recall: 528, 138
+            // group recall: 732, 17
+            if (type == 528 && subType == 138) {
+                handleMsgPushForC2cRecall(param, msgPush, message);
+            } else if (type == 732 && subType == 17) {
+                handleMsgPushForGroupRecall(param, msgPush, message);
+            }
+        } catch (InvalidProtocolBufferException | ReflectiveOperationException e) {
+            traceError(e);
+        }
+    }
+
+    private void handleMsgPushForC2cRecall(
+            @NonNull XC_MethodHook.MethodHookParam param,
+            @NonNull MsgPushOuterClass.MsgPush msgPush,
+            @NonNull MessageOuterClass.Message message
+    ) throws InvalidProtocolBufferException, ReflectiveOperationException {
+        MessageBodyOuterClass.MessageBody body = message.getBody();
+        if (!body.hasMsgContent()) {
+            return;
+        }
+        ByteString msgContent = body.getMsgContent();
+        C2CMsgRecallOuterClass.C2CMsgRecall msgRecall = C2CMsgRecallOuterClass.C2CMsgRecall.parseFrom(msgContent);
+        List<C2CMsgRecallOuterClass.C2CMsgRecall.MsgInfo> msgInfoList = msgRecall.getMsgInfosList();
+        String selfUid = RelationNTUinAndUidApi.getUidFromUin(AppRuntimeHelper.getAccount());
+        if (TextUtils.isEmpty(selfUid)) {
+            Log.e("handleMsgPushForC2cRecall fatal: selfUid is empty");
+            return;
+        }
+        for (C2CMsgRecallOuterClass.C2CMsgRecall.MsgInfo msgInfo : msgInfoList) {
+            long msgUid = msgInfo.getMsgUid();
+            long msgSeq = msgInfo.getMsgSeq();
+            long msgClientSeq = msgInfo.getMsgClientSeq();
+            long timeSeconds = msgInfo.getTimestamp();
+            String fromUid = msgInfo.getFromUid();
+            String toUid = msgInfo.getToUid();
+            long random64 = msgInfo.getRandomId();
+            // from uid is always operator
+            String peerUid;
+            if (selfUid.equals(fromUid)) {
+                // msg is revoked by myself
+                peerUid = toUid;
+            } else {
+                peerUid = fromUid;
+            }
+            // invoke the handler
+            onRecallSysMsgForNT(ChatTypeConstants.C2C, peerUid, fromUid, fromUid, toUid, random64, timeSeconds, msgUid, msgSeq, (int) msgClientSeq);
+        }
+    }
+
+    private void handleMsgPushForGroupRecall(
+            @NonNull XC_MethodHook.MethodHookParam param,
+            @NonNull MsgPushOuterClass.MsgPush msgPush,
+            @NonNull MessageOuterClass.Message message
+    ) throws InvalidProtocolBufferException, ReflectiveOperationException {
+        handleCommonGroupMessageRecall(message);
+    }
+
+    private void handleCommonGroupMessageRecall(
+            @NonNull MessageOuterClass.Message message
+    ) throws InvalidProtocolBufferException, ReflectiveOperationException {
+        String selfUid = RelationNTUinAndUidApi.getUidFromUin(AppRuntimeHelper.getAccount());
+        if (TextUtils.isEmpty(selfUid)) {
+            Log.e("handleMsgPushForC2cRecall fatal: selfUid is empty");
+            return;
+        }
+        // verify the message type
+        ContentHeadOuterClass.ContentHead contentHead = message.getContentHead();
+        int type = contentHead.getType();
+        int subType = contentHead.getSubType();
+        // group recall: 732, 17
+        if (!(type == 732 && subType == 17)) {
+            // not our business
+            return;
+        }
+        MessageBodyOuterClass.MessageBody body = message.getBody();
+        if (!body.hasMsgContent()) {
+            return;
+        }
+        ByteString msgContent = body.getMsgContent();
+        if (msgContent.size() < 8) {
+            Log.e("handleMsgPushForGroupRecall: msgContent size is less than 8");
+            return;
+        }
+        // skip first 7 bytes
+        byte[] msgContentBytes = msgContent.toByteArray();
+        byte[] msgContentBytesTrimmed = new byte[msgContentBytes.length - 7];
+        System.arraycopy(msgContentBytes, 7, msgContentBytesTrimmed, 0, msgContentBytesTrimmed.length);
+        GroupMsgRecallOuterClass.GroupMsgRecall groupMsgRecall = GroupMsgRecallOuterClass.GroupMsgRecall.parseFrom(msgContentBytesTrimmed);
+        if (groupMsgRecall.getOpType() != 7) {
+            Log.w("handleMsgPushForGroupRecall: on recall group sys msg! no Prompt_MsgRecallReminder op_type: " + groupMsgRecall.getOpType());
+            return;
+        }
+        if (groupMsgRecall.getGroupCode() == 0) {
+            Log.e("handleMsgPushForGroupRecall: groupMsgRecall has no groupCode");
+            return;
+        }
+        String groupCodeText = String.valueOf(groupMsgRecall.getGroupCode());
+        if (!groupMsgRecall.hasMsgRecall()) {
+            Log.e("handleMsgPushForGroupRecall: groupMsgRecall has no MsgRecall");
+            return;
+        }
+        GroupMsgRecallOuterClass.GroupMsgRecall.MsgRecallInfo groupMsgRecallInfo = groupMsgRecall.getMsgRecall();
+        String operatorUid = groupMsgRecallInfo.getOperatorUid();
+        List<GroupMsgRecallOuterClass.GroupMsgRecall.MsgRecallInfo.MsgInfo> msgs = groupMsgRecallInfo.getMsgInfosList();
+        for (GroupMsgRecallOuterClass.GroupMsgRecall.MsgRecallInfo.MsgInfo msgInfo : msgs) {
+            long msgSeq = msgInfo.getMsgSeq();
+            long timeSeconds = msgInfo.getTimestamp();
+            String authorUid = msgInfo.getMsgAuthorUid();
+            long random64 = msgInfo.getRandomId();
+
+            // Log.d("handleMsgPushForGroupRecall: groupCode=" + groupCodeText + ", operatorUid=" + operatorUid
+            //        + ", authorUid=" + authorUid + ", random64=" + random64 + ", timeSeconds=" + timeSeconds
+            //        + ", msgSeq=" + msgSeq);
+
+            // invoke the handler
+            onRecallSysMsgForNT(ChatTypeConstants.GROUP, groupCodeText, operatorUid, authorUid, groupCodeText, random64, timeSeconds, 0, msgSeq, 0);
+        }
+    }
+
+    private static String b64encode(byte[] data) {
+        return android.util.Base64.encodeToString(data, android.util.Base64.NO_WRAP);
+    }
+
+    private native boolean nativeInitNtKernelRecallMsgHookV1p2();
+
+    private void onRevokeMsgLegacy(Object revokeMsgInfo) throws Exception {
         RevokeMsgInfoImpl info = new RevokeMsgInfoImpl((Parcelable) revokeMsgInfo);
         // 1. C2C chat session, istroop=0, RevokeMsgInfo is always the same on both side. e.g.
         // istroop=0, shmsgseq=***(valid),
@@ -243,6 +493,7 @@ public class RevokeMsgHook extends CommonConfigFunctionHook {
             aioSessionUin = info.friendUin;
         } else {
             // XXX: maybe confession chat? 3000: temp C2C chat? guild?
+            // XXX: ??? 1000 ???
             throw new IllegalStateException("onRevokeMsg, istroop=" + istroop);
         }
 
@@ -250,7 +501,7 @@ public class RevokeMsgHook extends CommonConfigFunctionHook {
             return;
         }
 
-        Object msgObject = getMessage(aioSessionUin, istroop, shmsgseq, info.msgUid);
+        Object msgObject = getMessageLegacy(aioSessionUin, istroop, shmsgseq, info.msgUid);
         // long id = getMessageUid(msgObject);
         long newMsgUid;
         if (info.msgUid != 0) {
@@ -364,49 +615,67 @@ public class RevokeMsgHook extends CommonConfigFunctionHook {
     }
 
     /**
-     * Called by NotifyRecallMsgEventForC2c in NtRecallMsgHook.cc from native.
+     * Called NtRecallMsgHook.cc from native.
      * <p>
      * We are not allowed to throw any exception in this method.
      */
     @Keep
-    private static void handleC2cRecallMsgFromNtKernel(String fromUid, String toUid, long random64,
-            long timeSeconds, long msgUid, long msgSeq, int msgClientSeq) {
+    private static void handleRecallSysMsgFromNtKernel(int chatType, String fromUid, String recallOpUid, String msgAuthorUid,
+            String toUid, long random64, long timeSeconds, long msgUid, long msgSeq, int msgClientSeq) {
         SyncUtils.async(() -> {
             try {
-                RevokeMsgHook.INSTANCE.onRecallC2cMsgForNT(fromUid, toUid, random64, timeSeconds, msgUid, msgSeq, msgClientSeq);
+                String selfUid = RelationNTUinAndUidApi.getUidFromUin(AppRuntimeHelper.getAccount());
+                if (TextUtils.isEmpty(selfUid)) {
+                    Log.e("onRecallSysMsgForNT fatal: selfUid is empty");
+                    return;
+                }
+                String peerUid;
+                if (selfUid.equals(fromUid)) {
+                    // msg is revoked by myself
+                    peerUid = toUid;
+                } else {
+                    peerUid = fromUid;
+                }
+                RevokeMsgHook.INSTANCE.onRecallSysMsgForNT(chatType, peerUid, recallOpUid, msgAuthorUid, toUid,
+                        random64, timeSeconds, msgUid, msgSeq, msgClientSeq);
             } catch (Exception | LinkageError | AssertionError e) {
                 RevokeMsgHook.INSTANCE.traceError(e);
             }
         });
     }
 
-    private void onRecallC2cMsgForNT(String fromUid, String toUid, long random64, long timeSeconds, long msgUid, long msgSeq, int msgClientSeq)
-            throws ReflectiveOperationException {
-        String fromUin = RelationNTUinAndUidApi.getUinFromUid(fromUid);
-        String toUin = RelationNTUinAndUidApi.getUinFromUid(toUid);
+    private void onRecallSysMsgForNT(int chatType, String peerUid, String recallOpUid, String msgAuthorUid, String toUid,
+            long random64, long timeSeconds, long msgUid, long msgSeq, int msgClientSeq) throws ReflectiveOperationException {
+        if (TextUtils.isEmpty(peerUid)) {
+            Log.e("onRecallSysMsgForNT fatal: peerUid is empty");
+            return;
+        }
+        if (chatType != 1 && chatType != 2) {
+            Log.e("onRecallSysMsgForNT fatal: chatType is not c2c or troop");
+            return;
+        }
+        // for debug log
+//        Log.d("onRecallSysMsgForNT: chatType=" + chatType + ", peerUid=" + peerUid + ", recallOpUid=" + recallOpUid
+//                + ", msgAuthorUid=" + msgAuthorUid + ", toUid=" + toUid + ", random64=" + random64 + ", timeSeconds=" + timeSeconds
+//                + ", msgUid=" + msgUid + ", msgSeq=" + msgSeq + ", msgClientSeq=" + msgClientSeq);
+        // operatorUin may be empty, in the case when in a group chat, someone recalled a message by an admin or owner,
+        // but your NT kernel are not so familiar with the admin or owner, and it doesn't know the uin of the admin or owner.
         String selfUin = AppRuntimeHelper.getAccount();
         String selfUid = RelationNTUinAndUidApi.getUidFromUin(selfUin);
-        if (TextUtils.isEmpty(fromUin)) {
-            Log.e("onRecallC2cMsg fatal: fromUin is empty");
-            return;
-        }
-        if (TextUtils.isEmpty(toUin)) {
-            Log.e("onRecallC2cMsg fatal: toUin is empty");
-            return;
-        }
         if (TextUtils.isEmpty(selfUid)) {
-            Log.e("onRecallC2cMsg fatal: selfUid is empty");
+            Log.e("onRecallSysMsgForNT fatal: selfUid is empty");
             return;
         }
-        // C2C PM
-        if (selfUid.equals(fromUid)) {
-            // ignore msg revoked by self
+        if (TextUtils.isEmpty(msgAuthorUid)) {
+            Log.e("onRecallSysMsgForNT fatal: msgAuthorUid is empty");
             return;
         }
-        String friendUid = fromUid;
-        Contact contact = new Contact(ChatTypeConstants.C2C, friendUid, "");
+        if (chatType == 2 && !Objects.equals(peerUid, toUid)) {
+            Log.w("!!! onRecallSysMsgForNT potential bug: chatType=" + chatType + ", peerUid=" + peerUid + ", toUid=" + toUid + ", selfUid=" + selfUid);
+        }
+        ContactCompat contact = new ContactCompat(chatType, peerUid, "");
         AppRuntime app = AppRuntimeHelper.getAppRuntime();
-        IKernelMsgService kmsgSvc = MsgServiceHelper.getKernelMsgService(app);
+        KernelMsgServiceCompat kmsgSvc = MsgServiceHelper.getKernelMsgService(app);
         // I don't know why, but...
         // IKernelMsgService.getMsgsByMsgId callback: result=0, errMsg=null, msgList=[](empty list)
         // IKernelMsgService.getMsgsBySeqList does not invoke callback at all, and no log
@@ -417,32 +686,126 @@ public class RevokeMsgHook extends CommonConfigFunctionHook {
                 if (queryResult == 0 && msgList != null && !msgList.isEmpty()) {
                     msgObject = msgList.get(0);
                 } else if (queryResult == 0) {
-                    Log.d("onRecallC2cMsg: msg not found, msgUid=" + msgUid);
+                    Log.d("onRecallSysMsgForNT: msg not found, msgSeq=" + msgSeq);
                 } else {
-                    Log.e("onRecallC2cMsg error: getMsgsByMsgId failed, result=" + queryResult + ", errMsg=" + errMsg);
+                    Log.e("onRecallSysMsgForNT error: getMsgsByMsgId failed, result=" + queryResult + ", errMsg=" + errMsg);
                 }
-                String revokerPron = selfUin.equals(fromUin) ? "你" : "对方";
-                String summary;
                 NtGrayTipHelper.NtGrayTipJsonBuilder builder = new NtGrayTipHelper.NtGrayTipJsonBuilder();
-                if (msgObject != null) {
-                    builder.appendText(revokerPron + "尝试撤回");
-                    builder.append(new NtGrayTipHelper.NtGrayTipJsonBuilder.MsgRefItem("一条消息", msgSeq));
-                    summary = revokerPron + "尝试撤回一条消息";
+                String summary;
+                if (chatType == ChatTypeConstants.C2C) {
+                    String revokerPron = selfUid.equals(recallOpUid) ? "你" : "对方";
+                    if (msgObject != null && !(msgObject.getMsgType() == 5 && msgObject.getSubMsgType() == 4)) {
+                        builder.appendText(revokerPron + "尝试撤回");
+                        builder.append(new NtGrayTipHelper.NtGrayTipJsonBuilder.MsgRefItem("一条消息", msgSeq));
+                        if (isShowShmsgseqEnabled()) {
+                            builder.appendText(" [seq=" + msgSeq + "]");
+                        }
+                        summary = revokerPron + "尝试撤回一条消息";
+                    } else if (msgObject != null && (msgObject.getMsgType() == 5 && msgObject.getSubMsgType() == 4)) {
+                        // Case 1:
+                        // C2C only: msg not actually received, system message: "对方撤回了一条消息"
+                        // We don't need to do anything here, otherwise we will have duplicated gray tip.
+                        // Case 2:
+                        // The current user itself have revoked a msg. No extra action is required.
+                        return;
+                    } else {
+                        builder.appendText(revokerPron + "撤回了一条消息(没收到) [msgId=" + msgUid + ", seq=" + msgSeq + ", cseq=" + msgClientSeq + "]");
+                        summary = revokerPron + "撤回了一条消息(没收到)";
+                    }
+                } else if (chatType == ChatTypeConstants.GROUP) {
+                    String operatorName = ContactUtils.getDisplayNameForUid(recallOpUid, peerUid);
+                    String operatorUin = RelationNTUinAndUidApi.getUinFromUid(recallOpUid);
+                    // note: operatorUin may be empty, in the case when in a group chat, NT kernel are not so familiar with the one
+                    // do we have the original message?
+                    if (msgObject != null && msgObject.getMsgType() != 1 && !(msgObject.getMsgType() == 5 && msgObject.getSubMsgType() == 4)) {
+                        // good, we have the original message
+                        // then, is the original message sent by the operator?
+                        long msgAuthorUin = msgObject.getSenderUin();
+                        String msgAuthorName = getMsgSenderReferenceName(msgObject, true);
+                        if (recallOpUid.equals(msgAuthorUid)) {
+                            // by themselves
+                            builder.append(new NtGrayTipHelper.NtGrayTipJsonBuilder.UserItem(String.valueOf(operatorUin), recallOpUid, operatorName));
+                            builder.appendText("尝试撤回");
+                            builder.append(new NtGrayTipHelper.NtGrayTipJsonBuilder.MsgRefItem("一条消息", msgSeq));
+                            if (isShowShmsgseqEnabled()) {
+                                builder.appendText(" [seq=" + msgSeq + "]");
+                            }
+                            summary = operatorName + "尝试撤回一条消息";
+                        } else {
+                            builder.append(new NtGrayTipHelper.NtGrayTipJsonBuilder.UserItem(String.valueOf(operatorUin), recallOpUid, operatorName));
+                            builder.appendText("尝试撤回");
+                            builder.append(new NtGrayTipHelper.NtGrayTipJsonBuilder.UserItem(String.valueOf(msgAuthorUin), msgAuthorUid, msgAuthorName));
+                            builder.appendText("的");
+                            builder.append(new NtGrayTipHelper.NtGrayTipJsonBuilder.MsgRefItem("一条消息", msgSeq));
+                            if (isShowShmsgseqEnabled()) {
+                                builder.appendText(" [seq=" + msgSeq + "]");
+                            }
+                            summary = operatorName + "尝试撤回" + msgAuthorName + "的一条消息";
+                        }
+                    } else {
+                        // we don't have the original message
+                        if (selfUid.equals(recallOpUid) && (msgObject.getMsgType() == 5 && msgObject.getSubMsgType() == 4)) {
+                            // the message is recalled by self, and the gray tip is already there
+                            // we don't need to do anything here, otherwise we will have duplicated gray tip.
+                            // Control Flow Termination.
+                            return;
+                        }
+                        String msgAuthorName = ContactUtils.getDisplayNameForUid(msgAuthorUid, peerUid);
+                        String msgAuthorUin = RelationNTUinAndUidApi.getUinFromUid(msgAuthorUid);
+                        // msgAuthorUin may be empty, in the case when in a group chat, NT kernel are not so familiar with the one
+                        if (recallOpUid.equals(msgAuthorUid)) {
+                            builder.append(new NtGrayTipHelper.NtGrayTipJsonBuilder.UserItem(String.valueOf(operatorUin), recallOpUid, operatorName));
+                            builder.appendText("撤回了一条消息(没收到) [seq=" + msgSeq + "]");
+                            summary = operatorName + "撤回了一条消息(没收到)";
+                        } else {
+                            builder.append(new NtGrayTipHelper.NtGrayTipJsonBuilder.UserItem(String.valueOf(operatorUin), recallOpUid, operatorName));
+                            builder.appendText("撤回了");
+                            builder.append(new NtGrayTipHelper.NtGrayTipJsonBuilder.UserItem(String.valueOf(msgAuthorUin), msgAuthorUid, msgAuthorName));
+                            builder.appendText("的一条消息(没收到) [seq=" + msgSeq + "]");
+                            summary = operatorName + "撤回了" + msgAuthorName + "的一条消息(没收到)";
+                        }
+                    }
                 } else {
-                    builder.appendText(revokerPron + "撤回了一条消息(没收到) [msgId=" + msgUid + ", seq=" + msgSeq + ", cseq=" + msgClientSeq + "]");
-                    summary = revokerPron + "撤回了一条消息(没收到)";
+                    throw new AssertionError("onRecallSysMsgForNT chatType=" + chatType);
                 }
                 String jsonStr = builder.build().toString();
-                JsonGrayElement jsonGrayElement = NtGrayTipHelper.createLocalJsonElement(NtGrayTipHelper.AIO_AV_C2C_NOTICE, jsonStr, summary);
+                int busiId = (chatType == ChatTypeConstants.C2C) ? NtGrayTipHelper.AIO_AV_C2C_NOTICE : NtGrayTipHelper.AIO_AV_GROUP_NOTICE;
+                Object jsonGrayElement = NtGrayTipHelper.createLocalJsonElement(busiId, jsonStr, summary);
                 NtGrayTipHelper.addLocalJsonGrayTipMsg(AppRuntimeHelper.getAppRuntime(), contact, jsonGrayElement, true, true, (result, uin) -> {
                     if (result != 0) {
-                        Log.e("onRecallC2cMsg error: addLocalJsonGrayTipMsg failed, result=" + result);
+                        Log.e("onRecallSysMsgForNT error: addLocalJsonGrayTipMsg failed, result=" + result);
                     }
                 });
             } catch (Exception | LinkageError e) {
+                // dump all args to logcat
+                Log.e("error: onRecallSysMsgForNT failed, chatType=" + chatType + ", peerUid=" + peerUid + ", msgUid=" + msgUid + ", msgSeq=" + msgSeq
+                        + ", msgClientSeq=" + msgClientSeq + ", recallOpUid=" + recallOpUid + ", selfUid=" + selfUid, e);
                 traceError(e);
             }
         }));
+    }
+
+    private static String getMsgSenderReferenceName(@NonNull MsgRecord msgRecord, boolean isInGroup) {
+        if (isInGroup) {
+            String memberName = msgRecord.getSendMemberName();
+            if (!TextUtils.isEmpty(memberName)) {
+                return memberName;
+            }
+        }
+        String remarkName = msgRecord.getSendRemarkName();
+        if (!TextUtils.isEmpty(remarkName)) {
+            return remarkName;
+        }
+        String nickName = msgRecord.getSendNickName();
+        if (!TextUtils.isEmpty(nickName)) {
+            return nickName;
+        }
+        long uin = msgRecord.getSenderUin();
+        if (uin > 0) {
+            return String.valueOf(uin);
+        }
+        // wtf?
+        return msgRecord.getSenderUid();
     }
 
     private Bundle createTroopMemberHighlightItem(String memberUin) {
@@ -492,11 +855,47 @@ public class RevokeMsgHook extends CommonConfigFunctionHook {
         }
     }
 
-    private Object getMessage(String uin, int istroop, long shmsgseq, long msgUid) {
+    private Object getMessageLegacy(String uin, int istroop, long shmsgseq, long msgUid) {
         List<?> list = null;
         try {
             // message is query by shmsgseq, not by time ---> queryMessagesByShmsgseqFromDB
-            if (HostInfo.requireMinQQVersion(QQVersion.QQ_8_9_55)) {
+            // 定位方法名 ---> queryMsgItemByShmsgseq
+            if (HostInfo.requireMinQQVersion(QQVersion.QQ_9_0_60)) { // 9.0.60~9.0.68
+                list = (List<?>) Reflex.invokeVirtual(mQQMsgFacade, "t0",
+                        uin, istroop, shmsgseq, msgUid,
+                        String.class, int.class, long.class, long.class,
+                        List.class);
+            } else if (HostInfo.requireMinQQVersion(QQVersion.QQ_9_0_50)) { // 9.0.50
+                list = (List<?>) Reflex.invokeVirtual(mQQMsgFacade, "u2",
+                        uin, istroop, shmsgseq, msgUid,
+                        String.class, int.class, long.class, long.class,
+                        List.class);
+            } else if (HostInfo.requireMinQQVersion(QQVersion.QQ_9_0_25)) { // 9.0.25~9.0.35
+                list = (List<?>) Reflex.invokeVirtual(mQQMsgFacade, "u0",
+                        uin, istroop, shmsgseq, msgUid,
+                        String.class, int.class, long.class, long.class,
+                        List.class);
+            } else if (HostInfo.requireMinQQVersion(QQVersion.QQ_9_0_0)) { // 9.0.0~9.0.20
+                list = (List<?>) Reflex.invokeVirtual(mQQMsgFacade, "v0",
+                        uin, istroop, shmsgseq, msgUid,
+                        String.class, int.class, long.class, long.class,
+                        List.class);
+            } else if (HostInfo.requireMinQQVersion(QQVersion.QQ_8_9_88)) { // 8.9.88~8.9.93
+                list = (List<?>) Reflex.invokeVirtual(mQQMsgFacade, "w0",
+                        uin, istroop, shmsgseq, msgUid,
+                        String.class, int.class, long.class, long.class,
+                        List.class);
+            } else if (HostInfo.requireMinQQVersion(QQVersion.QQ_8_9_85)) { // 8.9.85
+                list = (List<?>) Reflex.invokeVirtual(mQQMsgFacade, "x0",
+                        uin, istroop, shmsgseq, msgUid,
+                        String.class, int.class, long.class, long.class,
+                        List.class);
+            } else if (HostInfo.requireMinQQVersion(QQVersion.QQ_8_9_70)) { // 8.9.70~8.9.76
+                list = (List<?>) Reflex.invokeVirtual(mQQMsgFacade, "y0",
+                        uin, istroop, shmsgseq, msgUid,
+                        String.class, int.class, long.class, long.class,
+                        List.class);
+            } else if (HostInfo.requireMinQQVersion(QQVersion.QQ_8_9_55)) {
                 list = (List<?>) Reflex.invokeVirtual(mQQMsgFacade, "J0",
                         uin, istroop, shmsgseq, msgUid,
                         String.class, int.class, long.class, long.class,

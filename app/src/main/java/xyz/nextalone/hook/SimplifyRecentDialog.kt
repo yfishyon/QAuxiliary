@@ -25,33 +25,42 @@ import io.github.qauxv.base.annotation.FunctionHookEntry
 import io.github.qauxv.base.annotation.UiItemAgentEntry
 import io.github.qauxv.dsl.FunctionEntryRouter
 import io.github.qauxv.util.QQVersion
+import io.github.qauxv.util.TIMVersion
 import io.github.qauxv.util.requireMinQQVersion
+import io.github.qauxv.util.requireMinTimVersion
 import xyz.nextalone.base.MultiItemDelayableHook
-import xyz.nextalone.util.*
+import xyz.nextalone.util.clazz
+import xyz.nextalone.util.get
+import xyz.nextalone.util.hookBefore
+import xyz.nextalone.util.method
+import xyz.nextalone.util.throwOrTrue
 
 @FunctionHookEntry
 @UiItemAgentEntry
 object SimplifyRecentDialog : MultiItemDelayableHook("na_simplify_recent_dialog_multi") {
 
-    override val preferenceTitle = "精简主页对话框"
+    override val preferenceTitle = "精简主页加号菜单"
+    override val extraSearchKeywords: Array<String> = arrayOf("+号菜单")
     override val uiItemLocation = FunctionEntryRouter.Locations.Simplify.MAIN_UI_TITLE
 
-    override val allItems = setOf("创建群聊", "加好友/群", "匹配聊天", "一起派对", "扫一扫", "面对面快传", "收付款")
+    override val allItems = setOf("创建群聊", "创建频道", "加好友/群", "匹配聊天", "一起派对", "扫一扫", "面对面快传", "收付款")
     override val defaultItems = setOf<String>()
 
     override fun initOnce() = throwOrTrue {
         val methodName: String
         val titleName: String
-        if (requireMinQQVersion(QQVersion.QQ_8_6_0)) {
+        if (requireMinQQVersion(QQVersion.QQ_8_6_0) || requireMinTimVersion(TIMVersion.TIM_4_0_95_BETA)) {
             methodName = "conversationPlusBuild"
             titleName = "title"
         } else {
             methodName = "b"
             titleName = "a"
         }
-        "com/tencent/widget/PopupMenuDialog".clazz?.method(methodName,
+        "com/tencent/widget/PopupMenuDialog".clazz?.method(
+            methodName,
             4,
-            "com.tencent.widget.PopupMenuDialog".clazz)?.hookBefore(this) {
+            "com.tencent.widget.PopupMenuDialog".clazz
+        )?.hookBefore(this) {
             val list = (it.args[1] as List<*>).toMutableList()
             val iterator = list.iterator()
             while (iterator.hasNext()) {
@@ -64,5 +73,5 @@ object SimplifyRecentDialog : MultiItemDelayableHook("na_simplify_recent_dialog_
         }
     }
 
-    override val isAvailable: Boolean get() = requireMinQQVersion(QQVersion.QQ_8_3_9)
+    override val isAvailable: Boolean get() = requireMinQQVersion(QQVersion.QQ_8_3_9) || requireMinTimVersion(TIMVersion.TIM_4_0_95_BETA)
 }

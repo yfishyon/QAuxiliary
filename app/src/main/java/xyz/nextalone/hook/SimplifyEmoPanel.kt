@@ -25,7 +25,9 @@ import io.github.qauxv.base.annotation.FunctionHookEntry
 import io.github.qauxv.base.annotation.UiItemAgentEntry
 import io.github.qauxv.dsl.FunctionEntryRouter
 import io.github.qauxv.util.QQVersion
+import io.github.qauxv.util.TIMVersion
 import io.github.qauxv.util.requireMinQQVersion
+import io.github.qauxv.util.requireMinTimVersion
 import xyz.nextalone.base.MultiItemDelayableHook
 import xyz.nextalone.util.clazz
 import xyz.nextalone.util.get
@@ -40,33 +42,37 @@ object SimplifyEmoPanel : MultiItemDelayableHook("na_simplify_emo_panel") {
 
     override val uiItemLocation = FunctionEntryRouter.Locations.Simplify.CHAT_EMOTICON
 
-    private val allItemsDict = mapOf(13 to "加号菜单", 7 to "默认表情", 4 to "收藏表情", 12 to "热门表情", 15 to "厘米秀", 11 to "DIY表情", 9 to "魔法表情", 17 to "超级QQ秀", -1 to "表情包")
+    private val allItemsDict = mapOf(
+        13 to "加号菜单",
+        7 to "默认表情",
+        4 to "收藏表情",
+        12 to "热门表情",
+        15 to "厘米秀",
+        11 to "DIY表情",
+        9 to "魔法表情",
+        17 to "超级QQ秀",
+        -1 to "表情包",
+        18 to "搜索表情",
+        19 to "动画贴纸",
+    )
     override val allItems: Set<String> = allItemsDict.values.toSet()
     override val enableCustom = false
 
     override fun initOnce() = throwOrTrue {
-        ("com.tencent.mobileqq.emoticonview.BasePanelView".clazz
-            ?: "com.tencent.mobileqq.emoticonview.EmoticonPanelController".clazz
-            )?.method("initTabView")?.hookBefore(
-                this
-            ) {
-                val mutableList: MutableList<*> =
-                    if ("com.tencent.mobileqq.emoticonview.BasePanelModel".clazz != null) {
-                        it.thisObject.get("mPanelController").get("mBasePanelModel").get("panelDataList") as MutableList<*>
-                    } else {
-                        it.thisObject.get("panelDataList") as MutableList<*>
-                    }
-                val list = mutableList.listIterator()
-                while (list.hasNext()) {
-                    val item = list.next()
-                    if (item != null) {
-                        val i = item.javaClass.getDeclaredField("type").get(item) as Int
-                        if (allItemsDict[i] in activeItems || i !in allItemsDict.keys && "表情包" in activeItems) {
-                            list.remove()
-                        }
-                    }
-                }
-                // fixme unable to locate the slide method
+        val clazz = "com.tencent.mobileqq.emoticonview.BasePanelView".clazz ?: "com.tencent.mobileqq.emoticonview.EmoticonPanelController".clazz
+        val method = clazz?.method("initTabView")
+        method?.hookBefore(this) {
+            val mutableList = if ("com.tencent.mobileqq.emoticonview.BasePanelModel".clazz != null) {
+                it.thisObject.get("mPanelController").get("mBasePanelModel").get("panelDataList")
+            } else {
+                it.thisObject.get("panelDataList")
+            } as MutableList<*>
+            mutableList.removeAll { item ->
+                if (item == null) return@removeAll false
+                val i = item.javaClass.getDeclaredField("type").get(item) as Int
+                allItemsDict[i] in activeItems || i !in allItemsDict.keys && "表情包" in activeItems
+            }
+            // fixme unable to locate the slide method
 //                "Lcom/tencent/mobileqq/emoticonview/EmoticonTabAdapter;->getView(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;".method.hookAfter(
 //                    this@SimplifyEmoPanel
 //                ) { it2 ->
@@ -76,8 +82,8 @@ object SimplifyEmoPanel : MultiItemDelayableHook("na_simplify_emo_panel") {
 //                    view.layoutParams = layoutParams
 //                    it2.result = view
 //                }
-            }
+        }
     }
 
-    override val isAvailable: Boolean get() = requireMinQQVersion(QQVersion.QQ_8_5_5)
+    override val isAvailable: Boolean get() = requireMinQQVersion(QQVersion.QQ_8_5_5) || requireMinTimVersion(TIMVersion.TIM_4_0_95_BETA)
 }

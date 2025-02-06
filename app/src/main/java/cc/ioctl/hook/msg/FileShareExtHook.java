@@ -22,6 +22,8 @@
 
 package cc.ioctl.hook.msg;
 
+import static io.github.qauxv.util.HostInfo.requireMinQQVersion;
+
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Context;
@@ -35,8 +37,6 @@ import cc.ioctl.util.HookUtils;
 import cc.ioctl.util.HostInfo;
 import cc.ioctl.util.Reflex;
 import cc.ioctl.util.ui.FaultyDialog;
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
 import io.github.qauxv.R;
 import io.github.qauxv.activity.ShadowShareFileAgentActivity;
 import io.github.qauxv.base.annotation.FunctionHookEntry;
@@ -47,13 +47,22 @@ import io.github.qauxv.lifecycle.Parasitics;
 import io.github.qauxv.ui.ResUtils;
 import io.github.qauxv.util.Initiator;
 import io.github.qauxv.util.Log;
+import io.github.qauxv.util.QQVersion;
 import io.github.qauxv.util.SyncUtils;
 import io.github.qauxv.util.Toasts;
+import io.github.qauxv.util.dexkit.DefaultFileModel;
+import io.github.qauxv.util.dexkit.DexKit;
+import io.github.qauxv.util.dexkit.DexKitTarget;
+import io.github.qauxv.util.dexkit.FileBrowserActivity_InnerClass_onItemClick;
+import io.github.qauxv.util.xpcompat.XC_MethodHook;
+import io.github.qauxv.util.xpcompat.XposedBridge;
 import java.io.File;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.List;
+import kotlin.collections.ArraysKt;
 
 @FunctionHookEntry
 @UiItemAgentEntry
@@ -62,7 +71,10 @@ public class FileShareExtHook extends CommonSwitchFunctionHook {
     public static final FileShareExtHook INSTANCE = new FileShareExtHook();
 
     private FileShareExtHook() {
-        super(SyncUtils.PROC_MAIN);
+        super(SyncUtils.PROC_MAIN, new DexKitTarget[]{
+                FileBrowserActivity_InnerClass_onItemClick.INSTANCE,
+                DefaultFileModel.INSTANCE
+        });
     }
 
     @NonNull
@@ -75,6 +87,12 @@ public class FileShareExtHook extends CommonSwitchFunctionHook {
     @Override
     public String getDescription() {
         return "[QQ>=8.8.80]为聊天文件菜单添加分享至其他应用";
+    }
+
+    @Nullable
+    @Override
+    public String[] getExtraSearchKeywords() {
+        return new String[]{"跨应用分享文件"};
     }
 
     @NonNull
@@ -98,16 +116,20 @@ public class FileShareExtHook extends CommonSwitchFunctionHook {
         Class<?> kiShareActionSheet = Initiator.loadClass("com.tencent.mobileqq.widget.share.ShareActionSheet");
         // args
         Class<?> kFileBrowserModelBase = Initiator.loadClass("com.tencent.mobileqq.filemanager.fileviewer.model.FileBrowserModelBase");
-        Class<?> kDefaultFileModel = Initiator.loadClassEither(
-                "com.tencent.mobileqq.filemanager.fileviewer.model.DefaultFileModel",
-                // QQ 8.9.0(3060)
-                "com.tencent.mobileqq.filemanager.fileviewer.model.b"
-        );
-        Class<?> kIFileViewerAdapter = Initiator.loadClassEither(
-                "com.tencent.mobileqq.filemanager.fileviewer.IFileViewerAdapter",
-                // QQ 8.9.0(3060)
-                "com.tencent.mobileqq.filemanager.fileviewer.h"
-        );
+        Class<?> kDefaultFileModel = DexKit.requireClassFromCache(DefaultFileModel.INSTANCE);
+        String fileViewerAdapterClassName;
+        if (requireMinQQVersion(QQVersion.QQ_9_1_5_BETA_20015)) {
+            fileViewerAdapterClassName = "com.tencent.mobileqq.filemanager.fileviewer.i";
+        } else if (requireMinQQVersion(QQVersion.QQ_9_0_80)) {
+            fileViewerAdapterClassName = "com.tencent.mobileqq.filemanager.fileviewer.h";
+        } else if (requireMinQQVersion(QQVersion.QQ_9_0_15)) {
+            fileViewerAdapterClassName = "com.tencent.mobileqq.filemanager.fileviewer.g";
+        } else if (requireMinQQVersion(QQVersion.QQ_8_9_0)) {
+            fileViewerAdapterClassName = "com.tencent.mobileqq.filemanager.fileviewer.h";
+        } else {
+            fileViewerAdapterClassName = "com.tencent.mobileqq.filemanager.fileviewer.IFileViewerAdapter";
+        }
+        Class<?> kIFileViewerAdapter = Initiator.loadClass(fileViewerAdapterClassName);
         kFileBrowserManager = Initiator.loadClassEither(
                 "com.tencent.mobileqq.filemanager.fileviewer.FileBrowserManager",
                 // QQ 8.9.0(3060)
@@ -118,20 +140,36 @@ public class FileShareExtHook extends CommonSwitchFunctionHook {
         fieldDefaultFileModel_IFileViewerAdapter.setAccessible(true);
         fieldFileBrowserManager_FileBrowserModelBase.setAccessible(true);
         Method getFilePath = kIFileViewerAdapter.getDeclaredMethod("getFilePath");
-        Method getShareSheetItemLists = Reflex.findSingleMethod(kFileBrowserManager, ArrayList[].class, false);
-        Method onItemClick = Initiator.loadClassEither(
-                "com.tencent.mobileqq.filemanager.fileviewer.FileBrowserManager$2",
-                // QQ 8.9.0(3060)
-                "com.tencent.mobileqq.filemanager.fileviewer.a$b"
-        ).getDeclaredMethod("onItemClick", kActionSheetItem, kiShareActionSheet);
+        Method getShareSheetItemLists1 = Reflex.findSingleMethod(kFileBrowserManager, ArrayList[].class, false);
+        List<Method> getShareSheetItemLists2List = ArraysKt.filter(kDefaultFileModel.getDeclaredMethods(), it -> {
+            return it.getParameterTypes().length == 0 && it.getReturnType() == ArrayList[].class;
+        });
+        String fileBrowserManagerItemClassName;
+        if (requireMinQQVersion(QQVersion.QQ_9_0_15)) {
+            fileBrowserManagerItemClassName = "com.tencent.mobileqq.filemanager.fileviewer.FileBrowserManager$c";
+        } else if (requireMinQQVersion(QQVersion.QQ_8_9_0)) {
+            fileBrowserManagerItemClassName = "com.tencent.mobileqq.filemanager.fileviewer.a$b";
+        } else {
+            fileBrowserManagerItemClassName = "com.tencent.mobileqq.filemanager.fileviewer.FileBrowserManager$2";
+        }
+        Method onItemClick = Initiator.loadClass(fileBrowserManagerItemClassName).getDeclaredMethod("onItemClick", kActionSheetItem, kiShareActionSheet);
         XposedBridge.hookMethod(onItemClick, mItemClickHandler);
-        HookUtils.hookAfterIfEnabled(this, getShareSheetItemLists, param -> {
+        Method mFileBrowserActivity_InnerClass_onItemClick = DexKit.loadMethodFromCache(FileBrowserActivity_InnerClass_onItemClick.INSTANCE);
+        if (mFileBrowserActivity_InnerClass_onItemClick != null) {
+            XposedBridge.hookMethod(mFileBrowserActivity_InnerClass_onItemClick, mItemClickHandler);
+        }
+        XC_MethodHook getShareSheetItemListsHook = HookUtils.afterIfEnabled(this, param -> {
             ArrayList<Object>[] results = (ArrayList<Object>[]) param.getResult();
             if (results == null || results.length != 2) {
                 Log.e("FileShareExtHook: getShareSheetItemLists result is null or length is not 2");
                 return;
             }
-            Object fileBrowserModel = fieldFileBrowserManager_FileBrowserModelBase.get(param.thisObject);
+            Object fileBrowserModel;
+            if (kFileBrowserManager.isInstance(param.thisObject)) {
+                fileBrowserModel = fieldFileBrowserManager_FileBrowserModelBase.get(param.thisObject);
+            } else {
+                fileBrowserModel = kFileBrowserModelBase.cast(param.thisObject);
+            }
             if (fileBrowserModel == null) {
                 return;
             }
@@ -144,6 +182,15 @@ public class FileShareExtHook extends CommonSwitchFunctionHook {
                 return;
             }
             ArrayList<Object> row2 = results[1];
+            // check if already added
+            if (!row2.isEmpty()) {
+                Object lastItem = row2.get(row2.size() - 1);
+                int id = Reflex.getInstanceObject(lastItem, "id", int.class);
+                if (id == R.id.ShareActionSheet_shareFileWithExtApp) {
+                    // already added
+                    return;
+                }
+            }
             Object item = ctorActionSheetItem.newInstance();
             Context ctx = Reflex.getFirstByType(param.thisObject, Activity.class);
             Parasitics.injectModuleResources(ctx.getResources());
@@ -154,6 +201,10 @@ public class FileShareExtHook extends CommonSwitchFunctionHook {
             Reflex.setInstanceObject(item, "argus", String.class, filePath);
             row2.add(item);
         });
+        XposedBridge.hookMethod(getShareSheetItemLists1, getShareSheetItemListsHook);
+        for (Method method : getShareSheetItemLists2List) {
+            XposedBridge.hookMethod(method, getShareSheetItemListsHook);
+        }
         return true;
     }
 
@@ -161,8 +212,24 @@ public class FileShareExtHook extends CommonSwitchFunctionHook {
         Object item = param.args[0];
         int id = (int) Reflex.getInstanceObject(item, "id", int.class);
         if (id == R.id.ShareActionSheet_shareFileWithExtApp) {
-            Object fileBrowserManager = Reflex.getFirstByType(param.thisObject, kFileBrowserManager);
-            Context ctx = Reflex.getFirstByType(fileBrowserManager, Activity.class);
+            Context ctx = null;
+            // case 1
+            Object fileBrowserManager = Reflex.getFirstByTypeOrNull(param.thisObject, kFileBrowserManager);
+            if (fileBrowserManager != null) {
+                ctx = Reflex.getFirstByType(fileBrowserManager, Activity.class);
+            }
+            // case 2
+            Class<?> kFileBrowserActivity = Initiator.load("com.tencent.mobileqq.filebrowser.FileBrowserActivity");
+            if (kFileBrowserActivity != null) {
+                Activity activity = (Activity) Reflex.getFirstByTypeOrNull(param.thisObject, kFileBrowserActivity);
+                if (activity != null) {
+                    ctx = activity;
+                }
+            }
+            if (ctx == null) {
+                Toasts.error(null, "unable to get activity");
+                return;
+            }
             assert ctx != null;
             String picPath = (String) Reflex.getInstanceObject(item, "argus", String.class);
             if (TextUtils.isEmpty(picPath)) {

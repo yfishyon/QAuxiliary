@@ -4,19 +4,18 @@
  * https://github.com/cinit/QAuxiliary
  *
  * This software is non-free but opensource software: you can redistribute it
- * and/or modify it under the terms of the GNU Affero General Public License
- * as published by the Free Software Foundation; either
- * version 3 of the License, or any later version and our eula as published
+ * and/or modify it under the terms of the qwq233 Universal License
+ * as published on https://github.com/qwq233/license; either
+ * version 2 of the License, or any later version and our EULA as published
  * by QAuxiliary contributors.
  *
  * This software is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Affero General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See the qwq233 Universal License for more details.
  *
- * You should have received a copy of the GNU Affero General Public License
- * and eula along with this software.  If not, see
- * <https://www.gnu.org/licenses/>
+ * See
+ * <https://github.com/qwq233/license>
  * <https://github.com/cinit/QAuxiliary/blob/master/LICENSE.md>.
  */
 
@@ -27,10 +26,13 @@ import android.app.AlertDialog
 import android.content.Context
 import android.view.View
 import android.widget.TextView
+import cc.hicore.QApp.QAppUtils
 import cc.ioctl.util.Reflex
 import cc.ioctl.util.afterHookIfEnabled
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import com.xiaoniu.dispatcher.OnMenuBuilder
+import io.github.qauxv.util.xpcompat.XC_MethodHook
+import io.github.qauxv.util.xpcompat.XposedBridge
+import io.github.qauxv.util.xpcompat.XposedHelpers
 import io.github.qauxv.R
 import io.github.qauxv.base.annotation.FunctionHookEntry
 import io.github.qauxv.base.annotation.UiItemAgentEntry
@@ -45,7 +47,7 @@ import xyz.nextalone.util.invoke
 
 @FunctionHookEntry
 @UiItemAgentEntry
-object TranslateTextMsg : CommonSwitchFunctionHook() {
+object TranslateTextMsg : CommonSwitchFunctionHook(), OnMenuBuilder {
     override val name: String = "翻译文本消息"
 
     override val description: String = "在聊天窗口中，长按一个文本消息出现翻译按钮，点击翻译"
@@ -55,6 +57,8 @@ object TranslateTextMsg : CommonSwitchFunctionHook() {
     private var isHook: Boolean = false
 
     override fun initOnce(): Boolean {
+        if (QAppUtils.isQQnt()) return true
+
         val _TextItemBuilder = Initiator._TextItemBuilder()
         XposedHelpers.findAndHookMethod(
             _TextItemBuilder, "a", Int::class.javaPrimitiveType, Context::class.java,
@@ -135,5 +139,16 @@ object TranslateTextMsg : CommonSwitchFunctionHook() {
             }
         }
         return false
+    }
+
+    override val targetComponentTypes: Array<String>
+        get() = arrayOf("com.tencent.mobileqq.aio.msglist.holder.component.text.AIOTextContentComponent")
+
+    override fun onGetMenuNt(msg: Any, componentType: String, param: XC_MethodHook.MethodHookParam) {
+        if (!isEnabled) return
+        val item = CustomMenu.createItemIconNt(msg, "翻译文本", R.drawable.ic_item_translate_72dp, R.id.item_translate) {
+            //TODO: 待开发
+        }
+        param.result = (param.result as List<*>) + item
     }
 }

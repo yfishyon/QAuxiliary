@@ -21,13 +21,14 @@
  */
 package io.github.qauxv.util
 
-import android.content.Context
 import cc.ioctl.util.Reflex
+import com.github.kyuubiran.ezxhelper.utils.findAllMethods
 import com.github.kyuubiran.ezxhelper.utils.findMethod
 import io.github.qauxv.util.dexkit.AbstractQQCustomMenuItem
 import io.github.qauxv.util.dexkit.DexKit
 import net.bytebuddy.ByteBuddy
 import net.bytebuddy.android.AndroidClassLoadingStrategy
+import net.bytebuddy.android.InjectableDexClassLoader
 import net.bytebuddy.implementation.FixedValue
 import net.bytebuddy.implementation.MethodCall
 import net.bytebuddy.matcher.ElementMatchers
@@ -86,18 +87,25 @@ object CustomMenu {
 
 
     private val strategy by lazy {
-        AndroidClassLoadingStrategy.Wrapping(
-            hostInfo.application.getDir(
-                "generated",
-                Context.MODE_PRIVATE
-            )
-        )
+        AndroidClassLoadingStrategy.Injecting()
     }
 
+    private lateinit var injectionClassLoader: ClassLoader
+
+    private fun getOrCreateInjectionClassLoader(parent: ClassLoader): ClassLoader {
+        if (!::injectionClassLoader.isInitialized) {
+            injectionClassLoader = InjectableDexClassLoader(parent)
+        }
+        return injectionClassLoader
+    }
+
+    /**
+     * Remember to add DexKitTarget AbstractQQCustomMenuItem to the constructor!
+     */
     @JvmStatic
     fun createItemNt(msg: Any, text: String, id: Int, click: () -> Unit): Any {
         val msgClass = Initiator.loadClass("com.tencent.mobileqq.aio.msg.AIOMsgItem")
-        val absMenuItem = DexKit.loadClassFromCache(AbstractQQCustomMenuItem)!!
+        val absMenuItem = DexKit.requireClassFromCache(AbstractQQCustomMenuItem)
         val clickName = absMenuItem.findMethod {
             returnType == Void.TYPE && parameterTypes.isEmpty()
         }.name
@@ -110,10 +118,36 @@ object CustomMenu {
             .method(ElementMatchers.named(clickName))
             .intercept(MethodCall.call { click() })
             .make()
-            .load(absMenuItem.classLoader, strategy)
+            .load(getOrCreateInjectionClassLoader(absMenuItem.classLoader!!), strategy)
             .loaded
         return menuItemClass.getDeclaredConstructor(msgClass)
             .newInstance(msg)
+    }
+
+    /**
+     * Starting from QQ version 9.0.0, support for menu icons was added.
+     */
+    @JvmStatic
+    fun createItemIconNt(msg: Any, text: String, icon: Int, id: Int, click: () -> Unit): Any {
+        if (!requireMinQQVersion(QQVersion.QQ_9_0_0) && !requireMinTimVersion(TIMVersion.TIM_4_0_95_BETA)) return createItemNt(msg, text, id, click)
+        val msgClass = Initiator.loadClass("com.tencent.mobileqq.aio.msg.AIOMsgItem")
+        val absMenuItem = DexKit.requireClassFromCache(AbstractQQCustomMenuItem)
+        val (iconName, idName) = absMenuItem.findAllMethods { returnType == Int::class.java && parameterTypes.isEmpty() }.map { it.name }
+        val clickName = absMenuItem.findMethod { returnType == Void.TYPE && parameterTypes.isEmpty() }.name
+        val menuItemClass = ByteBuddy()
+            .subclass(absMenuItem)
+            .method(ElementMatchers.returns(String::class.java))
+            .intercept(FixedValue.value(text))
+            .method(ElementMatchers.named(iconName))
+            .intercept(FixedValue.value(icon))
+            .method(ElementMatchers.named(idName))
+            .intercept(FixedValue.value(id))
+            .method(ElementMatchers.named(clickName))
+            .intercept(MethodCall.call { click() })
+            .make()
+            .load(getOrCreateInjectionClassLoader(absMenuItem.classLoader!!), strategy)
+            .loaded
+        return menuItemClass.getDeclaredConstructor(msgClass).newInstance(msg)
     }
 
     fun checkArrayElementNonNull(array: Array<Any?>?) {

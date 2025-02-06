@@ -3,7 +3,7 @@
 
 # Sets the minimum version of CMake required to build the native library.
 
-cmake_minimum_required(VERSION 3.8.0)
+cmake_minimum_required(VERSION 3.8.0...3.27)
 
 # Creates and names a library, sets it as either STATIC
 # or SHARED, and provides the relative paths to its source code.
@@ -15,7 +15,7 @@ add_subdirectory(MMKV/Core Core)
 add_library(mmkv STATIC native-bridge.cpp)
 
 set_target_properties(mmkv PROPERTIES
-        CXX_STANDARD 17
+        CXX_STANDARD 20
         CXX_EXTENSIONS OFF
         POSITION_INDEPENDENT_CODE ON
         )

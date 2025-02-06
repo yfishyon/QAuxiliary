@@ -25,6 +25,8 @@ import android.os.Parcelable;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import com.tencent.mobileqq.app.QQAppInterface;
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.util.Arrays;
 import java.util.HashMap;
 import mqq.app.AppRuntime;
@@ -78,6 +80,16 @@ public class Initiator {
             return sHostClassLoader.loadClass(className);
         } catch (ClassNotFoundException e) {
             return null;
+        }
+    }
+
+    public static boolean checkHostHasClass(String className) {
+        ClassLoader hostClassLoader = getHostClassLoader();
+        try {
+            hostClassLoader.loadClass(className);
+            return true;
+        } catch (ClassNotFoundException e) {
+            return false;
         }
     }
 
@@ -214,15 +226,58 @@ public class Initiator {
     }
 
     public static Class<?> _StartupDirector() {
-        return findClassWithSynthetics("com/tencent/mobileqq/startup/director/StartupDirector", 1);
+        return findClassWithSyntheticsSilently("com/tencent/mobileqq/startup/director/StartupDirector", 1);
     }
 
+    private static Class<?> skNtStartupDirector = null;
+    private static boolean sNotHaveNtStartupDirector = false;
+
     public static Class<?> _NtStartupDirector() {
-        Class<?> klass = Initiator.load("com.tencent.mobileqq.startup.director.a");
-        if (klass == _StartupDirector()) {
+        if (skNtStartupDirector != null) {
+            return skNtStartupDirector;
+        }
+        if (sNotHaveNtStartupDirector) {
             return null;
         }
-        return klass;
+        String[] candidates = new String[]{
+                "com.tencent.mobileqq.startup.director.a",
+                "com.tencent.mobileqq.h3.a.a",
+                "com.tencent.mobileqq.g3.a.a",
+                "com.tencent.mobileqq.i3.a.a",
+                "com.tencent.mobileqq.j3.a.a",
+                // QQ 9.1.28.21880 (8398) gray
+                "du3.a",
+        };
+        for (String candidate : candidates) {
+            Class<?> klass = load(candidate);
+            if (isNtStartupDirector(klass)) {
+                skNtStartupDirector = klass;
+                return klass;
+            }
+        }
+        sNotHaveNtStartupDirector = true;
+        return null;
+    }
+
+    private static boolean isNtStartupDirector(Class<?> klass) {
+        if (klass == null || klass == _StartupDirector()) {
+            return false;
+        }
+        if (!android.os.Handler.Callback.class.isAssignableFrom(klass)) {
+            return false;
+        }
+        // have a static instance field
+        boolean hasStaticInstance = false;
+        for (Field field : klass.getDeclaredFields()) {
+            if (Modifier.isStatic(field.getModifiers()) && field.getType() == klass) {
+                hasStaticInstance = true;
+                break;
+            }
+        }
+        if (!hasStaticInstance) {
+            return false;
+        }
+        return true;
     }
 
     public static Class<?> _BaseQQMessageFacade() {
@@ -333,7 +388,8 @@ public class Initiator {
     }
 
     public static Class<?> _TroopMemberLevelView() {
-        return findClassWithSynthetics("com.tencent.mobileqq.troop.troopMemberLevel.TroopMemberNewLevelView",
+        return findClassWithSynthetics("com.tencent.qqnt.aio.nick.memberlevel.TroopMemberLevelView",
+                "com.tencent.mobileqq.troop.troopMemberLevel.TroopMemberNewLevelView",
                 "com.tencent.mobileqq.troop.widget.troopmemberlevel.TroopMemberNewLevelView");
     }
 
@@ -427,7 +483,7 @@ public class Initiator {
     }
 
     @Nullable
-    private static Class<?> findClassWithSynthetics(@NonNull String className, int... index) {
+    public static Class<?> findClassWithSynthetics(@NonNull String className, int... index) {
         Class<?> cache = sClassCache.get(className);
         if (cache != null) {
             return cache;
@@ -443,6 +499,25 @@ public class Initiator {
             return clazz;
         }
         Log.e("Initiator/E class " + className + " not found");
+        return null;
+    }
+
+    @Nullable
+    private static Class<?> findClassWithSyntheticsSilently(@NonNull String className, int... index) {
+        Class<?> cache = sClassCache.get(className);
+        if (cache != null) {
+            return cache;
+        }
+        Class<?> clazz = load(className);
+        if (clazz != null) {
+            sClassCache.put(className, clazz);
+            return clazz;
+        }
+        clazz = findClassWithSyntheticsImpl(className, index);
+        if (clazz != null) {
+            sClassCache.put(className, clazz);
+            return clazz;
+        }
         return null;
     }
 

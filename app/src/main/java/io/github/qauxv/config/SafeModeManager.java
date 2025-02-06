@@ -4,26 +4,25 @@
  * https://github.com/cinit/QAuxiliary
  *
  * This software is non-free but opensource software: you can redistribute it
- * and/or modify it under the terms of the GNU Affero General Public License
- * as published by the Free Software Foundation; either
- * version 3 of the License, or any later version and our eula as published
+ * and/or modify it under the terms of the qwq233 Universal License
+ * as published on https://github.com/qwq233/license; either
+ * version 2 of the License, or any later version and our EULA as published
  * by QAuxiliary contributors.
  *
  * This software is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Affero General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See the qwq233 Universal License for more details.
  *
- * You should have received a copy of the GNU Affero General Public License
- * and eula along with this software.  If not, see
- * <https://www.gnu.org/licenses/>
+ * See
+ * <https://github.com/qwq233/license>
  * <https://github.com/cinit/QAuxiliary/blob/master/LICENSE.md>.
  */
 
 package io.github.qauxv.config;
 
 import android.os.Environment;
-import io.github.qauxv.startup.HookEntry;
+import io.github.qauxv.util.PackageConstants;
 import io.github.qauxv.util.HostInfo;
 import io.github.qauxv.util.Log;
 import java.io.File;
@@ -37,13 +36,15 @@ public class SafeModeManager {
 
     private File mSafeModeEnableFile;
 
+    private boolean sIsSafeModeForThisTime = false;
+
     public static SafeModeManager getManager() {
         if (INSTANCE == null) {
             INSTANCE = new SafeModeManager();
         }
         INSTANCE.mSafeModeEnableFile = new File(
                 Environment.getExternalStorageDirectory().getAbsolutePath() + "/Android/data/" +
-                        HookEntry.sCurrentPackageName + "/" + SAFE_MODE_FILE_NAME
+                        HostInfo.getHostInfo().getPackageName() + "/" + SAFE_MODE_FILE_NAME
         );
         return INSTANCE;
     }
@@ -56,16 +57,20 @@ public class SafeModeManager {
         return true;
     }
 
-    public boolean isEnabled() {
+    public boolean isEnabledForThisTime() {
+        return sIsSafeModeForThisTime;
+    }
+
+    public void setSafeModeForThisTime(boolean isSafeMode) {
+        sIsSafeModeForThisTime = isSafeMode;
+    }
+
+    public boolean isEnabledForNextTime() {
         return isAvailable() && mSafeModeEnableFile.exists();
     }
 
-    public boolean setEnabled(boolean isEnable) {
+    public boolean setEnabledForNextTime(boolean isEnable) {
         if (!isAvailable()) {
-            return false;
-        }
-        if (HookEntry.sCurrentPackageName == null || HookEntry.sCurrentPackageName.isBlank()) {
-            Log.e("Failed to enable or disable safe mode, sCurrentPackageName is null or blank");
             return false;
         }
         if (isEnable) {
@@ -79,7 +84,7 @@ public class SafeModeManager {
                 Log.e("Safe mode enable failed", e);
             }
         } else {
-            if (isEnabled()) {
+            if (isEnabledForNextTime()) {
                 try {
                     boolean isDeleted = mSafeModeEnableFile.delete();
                     if (!isDeleted) {

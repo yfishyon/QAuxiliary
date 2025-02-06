@@ -4,19 +4,18 @@
  * https://github.com/cinit/QAuxiliary
  *
  * This software is non-free but opensource software: you can redistribute it
- * and/or modify it under the terms of the GNU Affero General Public License
- * as published by the Free Software Foundation; either
- * version 3 of the License, or any later version and our eula as published
+ * and/or modify it under the terms of the qwq233 Universal License
+ * as published on https://github.com/qwq233/license; either
+ * version 2 of the License, or any later version and our EULA as published
  * by QAuxiliary contributors.
  *
  * This software is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Affero General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See the qwq233 Universal License for more details.
  *
- * You should have received a copy of the GNU Affero General Public License
- * and eula along with this software.  If not, see
- * <https://www.gnu.org/licenses/>
+ * See
+ * <https://github.com/qwq233/license>
  * <https://github.com/cinit/QAuxiliary/blob/master/LICENSE.md>.
  */
 
@@ -24,10 +23,11 @@ package io.github.qauxv.bridge.ntapi;
 
 import android.text.TextUtils;
 import androidx.annotation.NonNull;
-import com.tencent.qqnt.kernel.nativeinterface.Contact;
 import com.tencent.qqnt.kernel.nativeinterface.IAddJsonGrayTipMsgCallback;
 import com.tencent.qqnt.kernel.nativeinterface.IKernelMsgService;
-import com.tencent.qqnt.kernel.nativeinterface.JsonGrayElement;
+import io.github.qauxv.bridge.kernelcompat.ContactCompat;
+import io.github.qauxv.bridge.kernelcompat.KernelMsgServiceCompat;
+import io.github.qauxv.bridge.kernelcompat.KernelObjectHelper;
 import java.util.ArrayList;
 import java.util.Objects;
 import mqq.app.AppRuntime;
@@ -45,17 +45,28 @@ public class NtGrayTipHelper {
     public static final int AIO_AV_C2C_NOTICE = 2021;
     public static final int AIO_AV_GROUP_NOTICE = 2022;
 
-    public static void addLocalJsonGrayTipMsg(@NotNull AppRuntime app, @NotNull Contact contact, @NotNull JsonGrayElement jsonGrayElement, boolean needStore,
+    public static void addLocalJsonGrayTipMsg(@NotNull AppRuntime app, @NotNull ContactCompat contact, @NotNull Object jsonGrayElement, boolean needStore,
             boolean needRecentContact, @Nullable IAddJsonGrayTipMsgCallback callback) throws ReflectiveOperationException, LinkageError, IllegalStateException {
-        IKernelMsgService kmsgSvc = MsgServiceHelper.getKernelMsgService(app);
+        KernelMsgServiceCompat kmsgSvc = MsgServiceHelper.getKernelMsgService(app);
         if (kmsgSvc == null) {
             throw new IllegalStateException("IKernelMsgService is null");
         }
         kmsgSvc.addLocalJsonGrayTipMsg(contact, jsonGrayElement, needStore, needRecentContact, callback);
     }
 
-    public static JsonGrayElement createLocalJsonElement(long busiId, @NonNull String jsonStr, @NonNull String recentAbstract) {
-        return new JsonGrayElement(busiId, jsonStr, recentAbstract, false, null);
+    public static Object createLocalJsonElement(long busiId, @NonNull String jsonStr, @NonNull String recentAbstract) {
+        try {
+            Class.forName("com.tencent.qqnt.kernel.nativeinterface.JsonGrayElement");
+            return new com.tencent.qqnt.kernel.nativeinterface.JsonGrayElement(busiId, jsonStr, recentAbstract, false, null);
+        } catch (ClassNotFoundException ignored) {
+        }
+        try {
+            Class.forName("com.tencent.qqnt.kernelpublic.nativeinterface.JsonGrayElement");
+            return new com.tencent.qqnt.kernelpublic.nativeinterface.JsonGrayElement(busiId, jsonStr, recentAbstract, false, null);
+        } catch (ClassNotFoundException ignored) {
+        }
+        KernelObjectHelper.throwKernelObjectNotSupported("JsonGrayElement");
+        return null;
     }
 
     public static class NtGrayTipJsonBuilder {
@@ -96,12 +107,13 @@ public class NtGrayTipHelper {
 
         public static class UserItem implements Item {
 
+            // after testing, uin is not really required, but better to keep it
             private final String mUin;
             private final String mUid;
             private final String mNick;
 
-            public UserItem(@NonNull String uin, @NonNull String uid, @NonNull String nick) {
-                mUin = requireValidUin(uin);
+            public UserItem(@Nullable String uin, @NonNull String uid, @NonNull String nick) {
+                mUin = uin;
                 mUid = requireValidUid(uid);
                 mNick = Objects.requireNonNull(nick);
             }
@@ -115,7 +127,9 @@ public class NtGrayTipHelper {
                 json.put("tp", "0");
                 json.put("type", "qq");
                 json.put("uid", mUid);
-                json.put("uin", mUin);
+                if (isValidateUin(mUin)) {
+                    json.put("uin", mUin);
+                }
                 return json;
             }
 
@@ -221,6 +235,25 @@ public class NtGrayTipHelper {
             throw new IllegalArgumentException("uid is not a valid uid, uid=" + uid);
         }
         return uid;
+    }
+
+    public static boolean isValidateUid(String uid) {
+        if (TextUtils.isEmpty(uid)) {
+            return false;
+        }
+        return uid.length() == 24 && uid.startsWith("u_");
+    }
+
+    public static boolean isValidateUin(String uin) {
+        if (TextUtils.isEmpty(uin)) {
+            return false;
+        }
+        try {
+            // allow uid such as 9915
+            return Long.parseLong(uin) > 0;
+        } catch (NumberFormatException e) {
+            return false;
+        }
     }
 
 }

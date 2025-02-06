@@ -4,19 +4,18 @@
  * https://github.com/cinit/QAuxiliary
  *
  * This software is non-free but opensource software: you can redistribute it
- * and/or modify it under the terms of the GNU Affero General Public License
- * as published by the Free Software Foundation; either
- * version 3 of the License, or any later version and our eula as published
+ * and/or modify it under the terms of the qwq233 Universal License
+ * as published on https://github.com/qwq233/license; either
+ * version 2 of the License, or any later version and our EULA as published
  * by QAuxiliary contributors.
  *
  * This software is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Affero General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See the qwq233 Universal License for more details.
  *
- * You should have received a copy of the GNU Affero General Public License
- * and eula along with this software.  If not, see
- * <https://www.gnu.org/licenses/>
+ * See
+ * <https://github.com/qwq233/license>
  * <https://github.com/cinit/QAuxiliary/blob/master/LICENSE.md>.
  */
 
@@ -32,7 +31,7 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 
 public class FileUtils {
-    public static void WriteToFile(String File, String FileContent) {
+    public static void writeToFile(String File, String FileContent) {
         try {
             File parent = new File(File).getParentFile();
             if (!parent.exists()) parent.mkdirs();
@@ -46,19 +45,17 @@ public class FileUtils {
         if (file == null) {
             return;
         }
-        File[] files = file.listFiles();
-        if (files == null) return;
-        //遍历该目录下的文件对象
-        for (File f : files) {
-            if (f.isDirectory()) {
-                deleteFile(f);
-            } else {
-                f.delete();
+        if (file.isDirectory()){
+            File[] files = file.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    deleteFile(f);
+                }
             }
         }
         file.delete();
     }
-    public static String ReadFileString(File f) {
+    public static String readFileString(File f) {
         try {
             FileInputStream fInp = new FileInputStream(f);
             String Content = new String(readAllBytes(fInp), StandardCharsets.UTF_8);
@@ -68,8 +65,8 @@ public class FileUtils {
             return null;
         }
     }
-    public static String ReadFileString(String f) {
-        return ReadFileString(new File(f));
+    public static String readFileString(String f) {
+        return readFileString(new File(f));
     }
     public static void copy(String source, String dest) {
 

@@ -40,18 +40,25 @@ import io.github.qauxv.dsl.FunctionEntryRouter
 import io.github.qauxv.hook.CommonConfigFunctionHook
 import io.github.qauxv.ui.CommonContextWrapper
 import io.github.qauxv.util.Initiator
+import io.github.qauxv.util.QQVersion
+import io.github.qauxv.util.TIMVersion
 import io.github.qauxv.util.Toasts
+import io.github.qauxv.util.dexkit.AIO_InputRootInit_QQNT
 import io.github.qauxv.util.dexkit.DexKit
 import io.github.qauxv.util.dexkit.NBaseChatPie_init
+import io.github.qauxv.util.requireMaxQQVersion
+import io.github.qauxv.util.requireMinQQVersion
+import io.github.qauxv.util.requireMinTimVersion
 import kotlinx.coroutines.flow.MutableStateFlow
 import xyz.nextalone.util.findHostView
 import xyz.nextalone.util.hookAfter
+import xyz.nextalone.util.method
 import xyz.nextalone.util.putDefault
 import xyz.nextalone.util.throwOrTrue
 
 @FunctionHookEntry
 @UiItemAgentEntry
-object ChatInputHint : CommonConfigFunctionHook("na_chat_input_hint", arrayOf(NBaseChatPie_init)) {
+object ChatInputHint : CommonConfigFunctionHook("na_chat_input_hint", arrayOf(NBaseChatPie_init, AIO_InputRootInit_QQNT)) {
 
     override val name = "输入框增加提示"
     override val valueState: MutableStateFlow<String?>? = null
@@ -59,18 +66,59 @@ object ChatInputHint : CommonConfigFunctionHook("na_chat_input_hint", arrayOf(NB
     private const val strCfg = "na_chat_input_hint_str"
 
     override fun initOnce(): Boolean = throwOrTrue {
-        DexKit.requireMethodFromCache(NBaseChatPie_init).hookAfter(this) {
-            val chatPie: Any = it.thisObject
-            var aioRootView: ViewGroup? = null
-            for (m in Initiator._BaseChatPie().declaredMethods) {
-                if (m.returnType == ViewGroup::class.java
-                    && m.parameterTypes.isEmpty()
-                ) {
-                    aioRootView = m.invoke(chatPie) as ViewGroup
-                    break
+        if (requireMinTimVersion(TIMVersion.TIM_4_0_95_BETA)) {
+            // v4.0.98
+            // 7f116adf -> 说点什么...
+            // Lcom/tencent/tim/aio/inputbar/simpleui/a;->v()V
+            // Lcom/tencent/tim/aio/inputbar/simpleui/TimAIOInputSimpleUIVBDelegate;->B()V
+            "Lcom/tencent/tim/aio/inputbar/simpleui/TimAIOInputSimpleUIVBDelegate;->B()V".method.hookAfter(this) {
+                it.thisObject.javaClass.declaredFields.single { it.type == EditText::class.java }.apply {
+                    isAccessible = true
+                    val et = get(it.thisObject) as EditText
+                    et.hint = getValue()
                 }
             }
-            aioRootView?.findHostView<EditText>("input")?.hint = getDefaultConfig().getStringOrDefault(strCfg, "Typing words...")
+            return@throwOrTrue
+        }
+        if (requireMinQQVersion(QQVersion.QQ_8_9_63_BETA_11345)) {
+            // 私聊 && QQ9.0.35版本后的群聊
+            DexKit.requireMethodFromCache(AIO_InputRootInit_QQNT).hookAfter(this) {
+                it.thisObject.javaClass.declaredFields.single { it.type == EditText::class.java }.apply {
+                    isAccessible = true
+                    val et = get(it.thisObject) as EditText
+                    et.hint = getValue()
+                }
+            }
+            // QQ9.0.35版本前的群聊
+            if (requireMaxQQVersion(QQVersion.QQ_9_0_30)) {
+                when { // Lcom/tencent/mobileqq/aio/input/anonymous/AnonymousModeInputVBDelegate;->setNotAnonymousHint()V
+                    requireMinQQVersion(QQVersion.QQ_9_0_30) -> "Lcom/tencent/mobileqq/aio/input/c/c;->l()V"
+                    requireMinQQVersion(QQVersion.QQ_9_0_20) -> "Lcom/tencent/mobileqq/aio/input/b/c;->l()V"
+                    requireMinQQVersion(QQVersion.QQ_8_9_73) -> "Lcom/tencent/mobileqq/aio/input/b/c;->m()V"
+                    else -> "Lcom/tencent/mobileqq/aio/input/b/c;->l()V"
+                }.method.hookAfter(this) { param ->
+                    val f = param.thisObject.javaClass.getDeclaredField("f").apply { isAccessible = true }.get(param.thisObject)
+                    val b = f.javaClass.declaredFields.single {
+                        it.isAccessible = true
+                        it.get(f) is EditText
+                    }.get(f) as EditText
+                    b.hint = getValue()
+                }
+            }
+        } else {
+            DexKit.requireMethodFromCache(NBaseChatPie_init).hookAfter(this) {
+                val chatPie: Any = it.thisObject
+                var aioRootView: ViewGroup? = null
+                for (m in Initiator._BaseChatPie().declaredMethods) {
+                    if (m.returnType == ViewGroup::class.java
+                        && m.parameterTypes.isEmpty()
+                    ) {
+                        aioRootView = m.invoke(chatPie) as ViewGroup
+                        break
+                    }
+                }
+                aioRootView?.findHostView<EditText>("input")?.hint = getValue()
+            }
         }
     }
 
@@ -80,6 +128,8 @@ object ChatInputHint : CommonConfigFunctionHook("na_chat_input_hint", arrayOf(NB
         showInputHintDialog(activity)
     }
 
+    private fun getValue(): String = getDefaultConfig().getStringOrDefault(strCfg, "Typing words...")
+
     private fun showInputHintDialog(activity: Context) {
         val ctx = CommonContextWrapper.createAppCompatContext(activity)
         val dialog = androidx.appcompat.app.AlertDialog.Builder(ctx)
@@ -87,12 +137,7 @@ object ChatInputHint : CommonConfigFunctionHook("na_chat_input_hint", arrayOf(NB
         editText.textSize = 16f
         val _5 = LayoutHelper.dip2px(activity, 5f)
         editText.setPadding(_5, _5, _5, _5 * 2)
-        editText.setText(
-            getDefaultConfig().getStringOrDefault(
-                strCfg,
-                "Typing words..."
-            )
-        )
+        editText.setText(getValue())
         val checkBox = CheckBox(ctx)
         checkBox.text = "开启输入框文字提示"
         checkBox.isChecked = isEnabled

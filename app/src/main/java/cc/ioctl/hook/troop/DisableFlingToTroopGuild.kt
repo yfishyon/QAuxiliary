@@ -4,37 +4,40 @@
  * https://github.com/cinit/QAuxiliary
  *
  * This software is non-free but opensource software: you can redistribute it
- * and/or modify it under the terms of the GNU Affero General Public License
- * as published by the Free Software Foundation; either
- * version 3 of the License, or any later version and our eula as published
+ * and/or modify it under the terms of the qwq233 Universal License
+ * as published on https://github.com/qwq233/license; either
+ * version 2 of the License, or any later version and our EULA as published
  * by QAuxiliary contributors.
  *
  * This software is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Affero General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See the qwq233 Universal License for more details.
  *
- * You should have received a copy of the GNU Affero General Public License
- * and eula along with this software.  If not, see
- * <https://www.gnu.org/licenses/>
+ * See
+ * <https://github.com/qwq233/license>
  * <https://github.com/cinit/QAuxiliary/blob/master/LICENSE.md>.
  */
 
 package cc.ioctl.hook.troop
 
+import cc.hicore.QApp.QAppUtils
 import cc.ioctl.util.hookBeforeIfEnabled
+import com.github.kyuubiran.ezxhelper.utils.hookReturnConstant
 import io.github.qauxv.base.annotation.FunctionHookEntry
 import io.github.qauxv.base.annotation.UiItemAgentEntry
 import io.github.qauxv.dsl.FunctionEntryRouter
 import io.github.qauxv.hook.CommonSwitchFunctionHook
 import io.github.qauxv.util.QQVersion
+import io.github.qauxv.util.dexkit.AIODelegate_ISwipeListener
 import io.github.qauxv.util.dexkit.DexKit
 import io.github.qauxv.util.dexkit.TroopGuildChatPie_flingRToL
 import io.github.qauxv.util.requireMinQQVersion
+import xyz.nextalone.util.method
 
 @FunctionHookEntry
 @UiItemAgentEntry
-object DisableFlingToTroopGuild : CommonSwitchFunctionHook(arrayOf(TroopGuildChatPie_flingRToL)) {
+object DisableFlingToTroopGuild : CommonSwitchFunctionHook(arrayOf(TroopGuildChatPie_flingRToL, AIODelegate_ISwipeListener)) {
 
     override val name = "禁用右滑切换群帖子"
 
@@ -46,6 +49,10 @@ object DisableFlingToTroopGuild : CommonSwitchFunctionHook(arrayOf(TroopGuildCha
 
     override fun initOnce(): Boolean {
         if (!requireMinQQVersion(QQVersion.QQ_8_9_23)) return false
+        if (QAppUtils.isQQnt()) {
+            DexKit.requireClassFromCache(AIODelegate_ISwipeListener).method("b")!!.hookReturnConstant(null)
+            return true
+        }
         // com.tencent.mobileqq.troop.guild.TroopGuildChatPie#flingRToL()V
         val flingRToL = DexKit.requireMethodFromCache(TroopGuildChatPie_flingRToL)
         hookBeforeIfEnabled(flingRToL) { param ->

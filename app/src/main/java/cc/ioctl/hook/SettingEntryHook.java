@@ -25,6 +25,7 @@ import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 import static io.github.qauxv.util.Initiator.load;
 
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
@@ -35,12 +36,10 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.LinearLayout;
 import androidx.annotation.NonNull;
+import cc.ioctl.util.HookUtils;
 import cc.ioctl.util.HostInfo;
 import cc.ioctl.util.LayoutHelper;
 import cc.ioctl.util.Reflex;
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
 import io.github.qauxv.BuildConfig;
 import io.github.qauxv.R;
 import io.github.qauxv.activity.SettingsUiFragmentHostActivity;
@@ -49,12 +48,23 @@ import io.github.qauxv.core.HookInstaller;
 import io.github.qauxv.fragment.EulaFragment;
 import io.github.qauxv.fragment.FuncStatusDetailsFragment;
 import io.github.qauxv.hook.BasePersistBackgroundHook;
+import io.github.qauxv.lifecycle.Parasitics;
 import io.github.qauxv.util.Initiator;
 import io.github.qauxv.util.LicenseStatus;
 import io.github.qauxv.util.Log;
+import io.github.qauxv.util.xpcompat.XC_MethodHook;
+import io.github.qauxv.util.xpcompat.XposedBridge;
+import io.github.qauxv.util.xpcompat.XposedHelpers;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Proxy;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import kotlin.collections.ArraysKt;
+import kotlin.jvm.functions.Function0;
 
 @FunctionHookEntry
 public class SettingEntryHook extends BasePersistBackgroundHook {
@@ -66,12 +76,19 @@ public class SettingEntryHook extends BasePersistBackgroundHook {
     private static final int BG_TYPE_MIDDLE = 2;
     private static final int BG_TYPE_LAST = 3;
 
+    // am start "intent:#Intent;component=com.tencent.mobileqq/com.tencent.mobileqq.activity.QPublicFragmentActivity;S.public_fragment_class=com.tencent.mobileqq.setting.main.MainSettingFragment;end"
+
     private SettingEntryHook() {
     }
 
     @Override
     public boolean initOnce() throws Exception {
-        XposedHelpers.findAndHookMethod(Initiator._QQSettingSettingActivity(), "doOnCreate", Bundle.class, mAddModuleEntry);
+        injectSettingEntryForMainSettingConfigProvider();
+        // below 8.9.70
+        Class<?> kQQSettingSettingActivity = Initiator._QQSettingSettingActivity();
+        if (kQQSettingSettingActivity != null) {
+            XposedHelpers.findAndHookMethod(kQQSettingSettingActivity, "doOnCreate", Bundle.class, mAddModuleEntry);
+        }
         Class<?> kQQSettingSettingFragment = Initiator._QQSettingSettingFragment();
         if (kQQSettingSettingFragment != null) {
             Method doOnCreateView = kQQSettingSettingFragment.getDeclaredMethod("doOnCreateView",
@@ -79,6 +96,91 @@ public class SettingEntryHook extends BasePersistBackgroundHook {
             XposedBridge.hookMethod(doOnCreateView, mAddModuleEntry);
         }
         return true;
+    }
+
+    private void injectSettingEntryForMainSettingConfigProvider() throws ReflectiveOperationException {
+        // 8.9.70+
+        Class<?> kMainSettingFragment = Initiator.load("com.tencent.mobileqq.setting.main.MainSettingFragment");
+        if (kMainSettingFragment != null) {
+            Class<?> kMainSettingConfigProvider = Initiator.loadClass("com.tencent.mobileqq.setting.main.MainSettingConfigProvider");
+            // 9.1.20+, NewSettingConfigProvider, A/B test on 9.1.20
+            Class<?> kNewSettingConfigProvider = Initiator.load("com.tencent.mobileqq.setting.main.NewSettingConfigProvider");
+            Method getItemProcessListOld = Reflex.findSingleMethod(kMainSettingConfigProvider, List.class, false, Context.class);
+            Method getItemProcessListNew = null;
+            if (kNewSettingConfigProvider != null) {
+                getItemProcessListNew = Reflex.findSingleMethod(kNewSettingConfigProvider, List.class, false, Context.class);
+            }
+            Class<?> kAbstractItemProcessor = Initiator.loadClass("com.tencent.mobileqq.setting.main.processor.AccountSecurityItemProcessor").getSuperclass();
+            // SimpleItemProcessor has too few xrefs. I have no idea how to find it without a list of candidates.
+            final String[] possibleSimpleItemProcessorNames = new String[]{
+                    // 8.9.70 ~ 9.0.0
+                    "com.tencent.mobileqq.setting.processor.g",
+                    // 9.0.8+
+                    "com.tencent.mobileqq.setting.processor.h",
+                    // QQ 9.1.28.21880 (8398) gray
+                    "as3.i",
+            };
+            List<Class<?>> possibleSimpleItemProcessorCandidates = new ArrayList<>(4);
+            for (String name : possibleSimpleItemProcessorNames) {
+                Class<?> klass = Initiator.load(name);
+                if (klass != null && klass.getSuperclass() == kAbstractItemProcessor) {
+                    possibleSimpleItemProcessorCandidates.add(klass);
+                }
+            }
+            // assert possibleSimpleItemProcessorCandidates.size() == 1;
+            if (possibleSimpleItemProcessorCandidates.size() != 1) {
+                throw new IllegalStateException("possibleSimpleItemProcessorCandidates.size() != 1, got " + possibleSimpleItemProcessorCandidates);
+            }
+            Class<?> kSimpleItemProcessor = possibleSimpleItemProcessorCandidates.get(0);
+            Method setOnClickListener;
+            {
+                List<Method> candidates = ArraysKt.filter(kSimpleItemProcessor.getDeclaredMethods(), m -> {
+                    Class<?>[] argt = m.getParameterTypes();
+                    // NOSONAR java:S1872 not same class
+                    return m.getReturnType() == void.class && argt.length == 1 && Function0.class.getName().equals(argt[0].getName());
+                });
+                candidates.sort(Comparator.comparing(Method::getName));
+                // TIM 4.0.95.4001 only have one method, that is the one we need (onClick() lambda)
+                if (candidates.size() != 2 && candidates.size() != 1) {
+                    throw new IllegalStateException("com.tencent.mobileqq.setting.processor.g.?(Function0)V candidates.size() != 1|2");
+                }
+                // take the smaller one
+                setOnClickListener = candidates.get(0);
+            }
+            Constructor<?> ctorSimpleItemProcessor = kSimpleItemProcessor.getDeclaredConstructor(Context.class, int.class, CharSequence.class, int.class);
+            XC_MethodHook callback = HookUtils.afterAlways(this, 50, param -> {
+                List<Object> result = (List<Object>) param.getResult();
+                Context ctx = (Context) param.args[0];
+                Class<?> kItemProcessorGroup = result.get(0).getClass();
+                Constructor<?> ctor = kItemProcessorGroup.getDeclaredConstructor(List.class, CharSequence.class, CharSequence.class);
+                Parasitics.injectModuleResources(ctx.getResources());
+                @SuppressLint("DiscouragedApi")
+                int resId = ctx.getResources().getIdentifier("qui_tuning", "drawable", ctx.getPackageName());
+                Object entryItem = ctorSimpleItemProcessor.newInstance(ctx, R.id.setting2Activity_settingEntryItem, "QAuxiliary", resId);
+                Class<?> thatFunction0 = setOnClickListener.getParameterTypes()[0];
+                Object theUnit = thatFunction0.getClassLoader().loadClass("kotlin.Unit").getField("INSTANCE").get(null);
+                ClassLoader hostClassLoader = Initiator.getHostClassLoader();
+                Object func0 = Proxy.newProxyInstance(hostClassLoader, new Class<?>[]{thatFunction0}, (proxy, method, args) -> {
+                    if (method.getName().equals("invoke")) {
+                        onSettingEntryClick(ctx);
+                        return theUnit;
+                    }
+                    // must be sth from Object
+                    return method.invoke(this, args);
+                });
+                setOnClickListener.invoke(entryItem, func0);
+                ArrayList<Object> list = new ArrayList<>(1);
+                list.add(entryItem);
+                Object group = ctor.newInstance(list, "", "");
+                boolean isNew = param.thisObject.getClass().getName().contains("NewSettingConfigProvider");
+                int indexToInsert = isNew ? 2 : 1;
+                result.add(indexToInsert, group);
+            });
+            XposedBridge.hookMethod(getItemProcessListOld, callback);
+            if (getItemProcessListNew != null) {
+                XposedBridge.hookMethod(getItemProcessListNew, callback);
+            }
+        }
     }
 
     private final XC_MethodHook mAddModuleEntry = new XC_MethodHook(51) {
@@ -140,15 +242,7 @@ public class SettingEntryHook extends BasePersistBackgroundHook {
                     Reflex.invokeVirtual(item, "setRightText", "[未激活]", CharSequence.class);
                 }
                 item.setOnClickListener(v -> {
-                    if (HookInstaller.getFuncInitException() != null) {
-                        SettingsUiFragmentHostActivity.startActivityForFragment(activity, FuncStatusDetailsFragment.class,
-                                FuncStatusDetailsFragment.getBundleForLocation(FuncStatusDetailsFragment.TARGET_INIT_EXCEPTION));
-                    } else if (LicenseStatus.hasUserAcceptEula()) {
-                        activity.startActivity(new Intent(activity, SettingsUiFragmentHostActivity.class));
-                    } else {
-                        SettingsUiFragmentHostActivity.startActivityForFragment(activity, EulaFragment.class, null);
-                        activity.finish();
-                    }
+                    onSettingEntryClick(activity);
                 });
                 if (itemRef != null && !HostInfo.isQQHD()) {
                     //modern age
@@ -204,6 +298,20 @@ public class SettingEntryHook extends BasePersistBackgroundHook {
             }
         }
     };
+
+    private void onSettingEntryClick(@NonNull Context context) {
+        if (HookInstaller.getFuncInitException() != null) {
+            SettingsUiFragmentHostActivity.startActivityForFragment(context, FuncStatusDetailsFragment.class,
+                    FuncStatusDetailsFragment.getBundleForLocation(FuncStatusDetailsFragment.TARGET_INIT_EXCEPTION));
+        } else if (LicenseStatus.hasUserAcceptEula()) {
+            context.startActivity(new Intent(context, SettingsUiFragmentHostActivity.class));
+        } else {
+            SettingsUiFragmentHostActivity.startActivityForFragment(context, EulaFragment.class, null);
+            if (context instanceof Activity) {
+                ((Activity) context).finish();
+            }
+        }
+    }
 
     private void fixBackgroundType(@NonNull ViewGroup parent, @NonNull View itemView, int index) {
         int lastClusterId = index - 1;

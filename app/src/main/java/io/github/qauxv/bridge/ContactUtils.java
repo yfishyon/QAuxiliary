@@ -26,10 +26,13 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import cc.ioctl.util.Reflex;
 import com.tencent.common.app.AppInterface;
-import de.robv.android.xposed.XposedHelpers;
+import io.github.qauxv.util.xpcompat.XposedHelpers;
 import io.github.qauxv.base.annotation.DexDeobfs;
+import io.github.qauxv.bridge.ntapi.RelationNTUinAndUidApi;
+import io.github.qauxv.util.HostInfo;
 import io.github.qauxv.util.Initiator;
 import io.github.qauxv.util.Log;
+import io.github.qauxv.util.QQVersion;
 import io.github.qauxv.util.dexkit.DexKit;
 import io.github.qauxv.util.dexkit.NContactUtils_getBuddyName;
 import io.github.qauxv.util.dexkit.NContactUtils_getDiscussionMemberShowName;
@@ -58,23 +61,25 @@ public class ContactUtils {
         Objects.requireNonNull(memberUin);
         AppRuntime app = AppRuntimeHelper.getQQAppInterface();
         assert app != null;
-        try {
-            Object mTroopManager = ManagerHelper.getTroopManager();
-            Object troopMemberInfo = Reflex.invokeVirtualDeclaredOrdinal(mTroopManager, 0, 3, false,
-                    troopUin, memberUin,
-                    String.class, String.class,
-                    Initiator._TroopMemberInfo());
-            if (troopMemberInfo != null) {
-                String troopnick = (String) XposedHelpers.getObjectField(troopMemberInfo, "troopnick");
-                if (troopnick != null) {
-                    String ret = troopnick.replace(UNICODE_RLO, "");
-                    if (ret.trim().length() > 0) {
-                        return ret;
+        if (!HostInfo.requireMinQQVersion(QQVersion.QQ_9_0_25)) {
+            try {
+                Object mTroopManager = ManagerHelper.getTroopManager();
+                Object troopMemberInfo = Reflex.invokeVirtualDeclaredOrdinal(mTroopManager, 0, 3, false,
+                        troopUin, memberUin,
+                        String.class, String.class,
+                        Initiator._TroopMemberInfo());
+                if (troopMemberInfo != null) {
+                    String troopnick = (String) XposedHelpers.getObjectField(troopMemberInfo, "troopnick");
+                    if (troopnick != null) {
+                        String ret = troopnick.replace(UNICODE_RLO, "");
+                        if (ret.trim().length() > 0) {
+                            return ret;
+                        }
                     }
                 }
+            } catch (Exception | LinkageError e) {
+                Log.e(e);
             }
-        } catch (Exception | LinkageError e) {
-            Log.e(e);
         }
         try {
             String ret = getDiscussionMemberShowName(app, troopUin, memberUin);
@@ -131,7 +136,7 @@ public class ContactUtils {
         Objects.requireNonNull(uin, "uin is null");
         Method getBuddyName = DexKit.loadMethodFromCache(NContactUtils_getBuddyName.INSTANCE);
         if (getBuddyName == null) {
-            Log.e("getBuddyName but N_ContactUtils_getBuddyName not found");
+            Log.w("getBuddyName but N_ContactUtils_getBuddyName not found");
             return null;
         }
         try {
@@ -160,5 +165,48 @@ public class ContactUtils {
             Log.e(e);
             return troopUin;
         }
+    }
+
+    @NonNull
+    public static String getDisplayNameForUid(@NonNull String peerUid) {
+        return getDisplayNameForUid(peerUid, 0);
+    }
+
+    @NonNull
+    public static String getDisplayNameForUid(@NonNull String peerUid, long groupNumber) {
+        try {
+            String uin = RelationNTUinAndUidApi.getUinFromUid(peerUid);
+            if (TextUtils.isEmpty(uin)) {
+                return peerUid;
+            }
+            return getDisplayNameForUin(uin, groupNumber);
+        } catch (RuntimeException e) {
+            return peerUid;
+        }
+    }
+
+    @NonNull
+    public static String getDisplayNameForUid(@NonNull String peerUid, @Nullable String groupNumber) {
+        if (TextUtils.isEmpty(groupNumber)) {
+            return getDisplayNameForUid(peerUid);
+        }
+        return getDisplayNameForUid(peerUid, Long.parseLong(groupNumber));
+    }
+
+    @NonNull
+    public static String getDisplayNameForUin(@NonNull String uin) {
+        return getDisplayNameForUin(uin, 0);
+    }
+
+    @NonNull
+    public static String getDisplayNameForUin(@NonNull String uin, long groupNumber) {
+        if (groupNumber > 0) {
+            return getTroopMemberNick(String.valueOf(groupNumber), uin);
+        }
+        String ret = getBuddyName(AppRuntimeHelper.getQQAppInterface(), uin);
+        if (ret != null) {
+            return ret;
+        }
+        return uin;
     }
 }

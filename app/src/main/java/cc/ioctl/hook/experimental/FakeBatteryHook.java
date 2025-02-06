@@ -36,9 +36,11 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import cc.ioctl.fragment.FakeBatteryConfigFragment;
 import cc.ioctl.util.HostInfo;
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
+import io.github.qauxv.base.IEntityAgent;
+import io.github.qauxv.base.RuntimeErrorTracer;
+import io.github.qauxv.util.xpcompat.XC_MethodHook;
+import io.github.qauxv.util.xpcompat.XposedBridge;
+import io.github.qauxv.util.xpcompat.XposedHelpers;
 import io.github.qauxv.util.SyncUtils;
 import io.github.qauxv.activity.SettingsUiFragmentHostActivity;
 import io.github.qauxv.base.ISwitchCellAgent;
@@ -59,6 +61,7 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.List;
 import kotlin.Unit;
 import kotlin.jvm.functions.Function1;
 import kotlin.jvm.functions.Function2;
@@ -400,13 +403,13 @@ public class FakeBatteryHook extends BaseFunctionHook implements InvocationHandl
 
         @NonNull
         @Override
-        public Function1<IUiItemAgent, String> getTitleProvider() {
+        public Function1<IEntityAgent, String> getTitleProvider() {
             return (agent) -> "自定义电量";
         }
 
         @Nullable
         @Override
-        public Function2<IUiItemAgent, Context, CharSequence> getSummaryProvider() {
+        public Function2<IEntityAgent, Context, CharSequence> getSummaryProvider() {
             return null;
         }
 
@@ -445,4 +448,10 @@ public class FakeBatteryHook extends BaseFunctionHook implements InvocationHandl
             return null;
         }
     };
+
+    @Nullable
+    @Override
+    public List<RuntimeErrorTracer> getRuntimeErrorDependentComponents() {
+        return null;
+    }
 }

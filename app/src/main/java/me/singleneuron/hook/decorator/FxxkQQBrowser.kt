@@ -31,7 +31,6 @@ import androidx.browser.customtabs.CustomTabsIntent
 import androidx.browser.customtabs.CustomTabsIntent.COLOR_SCHEME_DARK
 import androidx.browser.customtabs.CustomTabsIntent.COLOR_SCHEME_LIGHT
 import cc.ioctl.hook.misc.JumpController
-import de.robv.android.xposed.XC_MethodHook
 import io.github.qauxv.base.annotation.UiItemAgentEntry
 import io.github.qauxv.dsl.FunctionEntryRouter
 import io.github.qauxv.router.decorator.BaseSwitchFunctionDecorator
@@ -39,6 +38,8 @@ import io.github.qauxv.router.decorator.IStartActivityHookDecorator
 import io.github.qauxv.router.dispacher.StartActivityHook
 import io.github.qauxv.ui.ResUtils
 import io.github.qauxv.util.hostInfo
+import io.github.qauxv.util.xpcompat.XC_MethodHook
+import java.util.regex.Pattern
 
 @UiItemAgentEntry
 object FxxkQQBrowser : BaseSwitchFunctionDecorator(), IStartActivityHookDecorator {
@@ -47,7 +48,9 @@ object FxxkQQBrowser : BaseSwitchFunctionDecorator(), IStartActivityHookDecorato
     override val description = "致敬 “去你大爷的内置浏览器”"
     override val uiItemLocation = FunctionEntryRouter.Locations.Simplify.UI_MISC
     override val dispatcher = StartActivityHook
+
     const val EXTRA_BYPASS_FQB_HOOK = "me.singleneuron.hook.decorator.EXTRA_BYPASS_FQB_HOOK"
+    private const val URL_REGEX = "^(https?|ftp)://[^\\s/$.?#].[^\\s]*$|^www\\.[^.]+\\.[^.]+$|^[^.]+\\.[^.]+$"
 
     @SuppressLint("ResourceType")
     override fun onStartActivityIntent(intent: Intent, param: XC_MethodHook.MethodHookParam): Boolean {
@@ -59,7 +62,7 @@ object FxxkQQBrowser : BaseSwitchFunctionDecorator(), IStartActivityHookDecorato
         val check3 = intent.component?.shortClassName?.contains("QQBrowserActivity")
         Log.d("check1=$check1 check2=$check2 check3=$check3")*/
         return if (!url.isNullOrBlank()
-            && url.lowercase().let { it.startsWith("http://") || it.startsWith("https://") }
+            && url.lowercase().let { Pattern.compile(URL_REGEX).matcher(it).matches() }
             && !shouldUseInternalBrowserForUrl(url)
             && intent.component?.shortClassName?.contains("QQBrowserActivity") == true
         ) {
@@ -87,8 +90,12 @@ object FxxkQQBrowser : BaseSwitchFunctionDecorator(), IStartActivityHookDecorato
             customTabsIntent.intent.apply {
                 putExtra("from_fqb", true)
                 putExtra(JumpController.EXTRA_JMP_JEFS_PERMISSIVE, true)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            customTabsIntent.launchUrl(hostInfo.application, Uri.parse(url))
+            customTabsIntent.launchUrl(
+                hostInfo.application,
+                Uri.parse(if (!url.startsWith("http://") && !url.startsWith("https://")) "http://$url" else url)
+            )
             param.result = null
             true
         } else {
@@ -101,7 +108,7 @@ object FxxkQQBrowser : BaseSwitchFunctionDecorator(), IStartActivityHookDecorato
             url.substring(url.indexOf("://") + 3)
         } else {
             url
-        }
+        }.dropWhile { it == '/' } // https:///ti.qq.com 前面有多个/不影响跳转，给腾讯擦屁股
         val host = if (body.contains("/")) {
             body.substring(0, body.indexOf("/"))
         } else {

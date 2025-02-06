@@ -4,25 +4,25 @@
  * https://github.com/cinit/QAuxiliary
  *
  * This software is non-free but opensource software: you can redistribute it
- * and/or modify it under the terms of the GNU Affero General Public License
- * as published by the Free Software Foundation; either
- * version 3 of the License, or any later version and our eula as published
+ * and/or modify it under the terms of the qwq233 Universal License
+ * as published on https://github.com/qwq233/license; either
+ * version 2 of the License, or any later version and our EULA as published
  * by QAuxiliary contributors.
  *
  * This software is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Affero General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See the qwq233 Universal License for more details.
  *
- * You should have received a copy of the GNU Affero General Public License
- * and eula along with this software.  If not, see
- * <https://www.gnu.org/licenses/>
+ * See
+ * <https://github.com/qwq233/license>
  * <https://github.com/cinit/QAuxiliary/blob/master/LICENSE.md>.
  */
 
 package cc.hicore.hook;
 
 import androidx.annotation.NonNull;
+import cc.hicore.QApp.QAppUtils;
 import cc.ioctl.util.HookUtils;
 import cc.ioctl.util.HostInfo;
 import io.github.qauxv.base.annotation.FunctionHookEntry;
@@ -32,7 +32,12 @@ import io.github.qauxv.hook.CommonSwitchFunctionHook;
 import io.github.qauxv.util.Initiator;
 import io.github.qauxv.util.IoUtils;
 import io.github.qauxv.util.Log;
+import io.github.qauxv.util.dexkit.DexKit;
+import io.github.qauxv.util.dexkit.DexKitTarget;
+import io.github.qauxv.util.dexkit.NT_SysAndEmojiResInfo;
 import java.io.File;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -44,6 +49,7 @@ public class ShowHideEmo extends CommonSwitchFunctionHook {
     public static final ShowHideEmo INSTANCE = new ShowHideEmo();
 
     private ShowHideEmo() {
+        super(new DexKitTarget[]{NT_SysAndEmojiResInfo.INSTANCE});
     }
 
     @NonNull
@@ -60,6 +66,16 @@ public class ShowHideEmo extends CommonSwitchFunctionHook {
 
     @Override
     protected boolean initOnce() throws Exception {
+        if (QAppUtils.isQQnt()) {
+            Method[] ms = DexKit.requireClassFromCache(NT_SysAndEmojiResInfo.INSTANCE).getDeclaredMethods();
+            for (Method m : ms) {
+                if (m.getReturnType() == boolean.class && !Modifier.isAbstract(m.getModifiers())) {
+                    HookUtils.hookBeforeIfEnabled(this, m, param -> param.setResult(false));
+                    return true;
+                }
+            }
+            return false;
+        }
         HookUtils.hookBeforeIfEnabled(this,
                 Initiator.loadClass("com.tencent.mobileqq.emoticon.QQSysAndEmojiResInfo")
                         .getDeclaredMethod("isEmoticonHide", Initiator.loadClass("com.tencent.mobileqq.emoticon.QQSysAndEmojiResInfo$QQEmoConfigItem")),
