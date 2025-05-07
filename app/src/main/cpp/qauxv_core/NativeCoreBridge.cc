@@ -45,6 +45,8 @@
 #include "utils/ElfView.h"
 #include "utils/ConfigManager.h"
 
+#include "unwindstack/AndroidUnwinder.h"
+
 #include "natives_utils.h"
 
 
@@ -54,6 +56,7 @@ struct NativeHookHandle {
 };
 
 static NativeHookHandle sNativeHookHandle = {};
+static const NativeAPIEntries* sXposedNativeHookEntries = nullptr;
 
 namespace qauxv {
 
@@ -212,6 +215,23 @@ void HookLoadLibrary() {
     LOGD("HookLoadLibrary: hooked {}", symbolName);
 }
 
+std::string TakeStackTraceAsString() {
+    using namespace unwindstack;
+    std::string stackTrace;
+    AndroidUnwinderData data;
+    AndroidLocalUnwinder unwinder;
+    auto tid = gettid();
+    bool result = unwinder.Unwind(tid, data);
+    if (!result) {
+        stackTrace = fmt::format("Unwind failed for pid {}, tid {}, error: {}", getpid(), tid, data.GetErrorString());
+        return stackTrace;
+    }
+    for (const auto& frame: data.frames) {
+        stackTrace += unwinder.FormatFrame(frame) + "\n";
+    }
+    return stackTrace;
+}
+
 void TraceError(JNIEnv* env, jobject thiz, std::string_view errMsg) {
     bool isAttachedManually = false;
     if (thiz == nullptr) {
@@ -222,6 +242,7 @@ void TraceError(JNIEnv* env, jobject thiz, std::string_view errMsg) {
         LOGE("TraceError fatal errMsg == null");
         return;
     }
+    std::string errMsgWithStack = std::string(errMsg) + "\n" + TakeStackTraceAsString();
     if (env == nullptr) {
         JavaVM* vm = HostInfo::GetJavaVM();
         if (vm == nullptr) {
@@ -300,7 +321,7 @@ void TraceError(JNIEnv* env, jobject thiz, std::string_view errMsg) {
         }
         return classLoader;
     };
-    const auto fnCallTraceErrorMethod = [env, thiz, errMsg](jobject classloader) {
+    const auto fnCallTraceErrorMethod = [env, thiz, errMsgWithStack](jobject classloader) {
         jclass kClassLoader = env->FindClass("java/lang/ClassLoader");
         jmethodID loadClassMethod = env->GetMethodID(kClassLoader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
         jclass kClass = (jclass) env->CallObjectMethod(classloader, loadClassMethod, env->NewStringUTF("io.github.qauxv.core.NativeCoreBridge"));
@@ -317,9 +338,9 @@ void TraceError(JNIEnv* env, jobject thiz, std::string_view errMsg) {
             env->ExceptionClear();
             return;
         }
-        jstring errMsgJString = env->NewStringUTF(errMsg.data());
+        jstring errMsgJString = env->NewStringUTF(errMsgWithStack.data());
         if (errMsgJString == nullptr) {
-            LOGE("TraceError fatal NewStringUTF failed, original error message: {}", errMsg);
+            LOGE("TraceError fatal NewStringUTF failed, original error message: {}", errMsgWithStack);
             env->ExceptionDescribe();
             env->ExceptionClear();
             return;
@@ -330,7 +351,8 @@ void TraceError(JNIEnv* env, jobject thiz, std::string_view errMsg) {
                                               errMsgJString);
         env->CallStaticVoidMethod(kClass, nativeTraceErrorHelperMethod, thiz, th);
         if (env->ExceptionCheck()) {
-            LOGE("TraceError fatal CallStaticVoidMethod nativeTraceErrorHelper failed, original error message: {}", errMsg);
+            LOGE("TraceError fatal CallStaticVoidMethod nativeTraceErrorHelper failed, original error message: {}",
+                 errMsgWithStack);
             env->ExceptionDescribe();
             env->ExceptionClear();
             return;
@@ -362,10 +384,25 @@ void SetCurrentNativeLibraryInitMode(NativeLibraryInitMode mode) {
 
 // called by Xposed framework
 EXPORT extern "C" [[maybe_unused]] NativeOnModuleLoaded native_init(const NativeAPIEntries* entries) {
+    sXposedNativeHookEntries = entries;
     sNativeHookHandle.hookFunction = entries->hookFunc;
     sNativeHookHandle.unhookFunction = entries->unhookFunc;
     qauxv::sHandleLoadLibraryCallbackInitialized = true;
     return &qauxv::HandleLoadLibrary;
+}
+
+__attribute__((visibility("protected")))
+void ChainLoaderCallTargetNativeInit(NativeInit func) {
+    static const NativeAPIEntries sFallbackNativeAPIEntries = {
+            .version=1,
+            .hookFunc=qauxv::CreateInlineHook,
+            .unhookFunc=qauxv::DestroyInlineHook
+    };
+    const NativeAPIEntries* entries = sXposedNativeHookEntries ? sXposedNativeHookEntries : &sFallbackNativeAPIEntries;
+    auto callback = func(entries);
+    if (callback != nullptr) {
+        qauxv::RegisterLoadLibraryCallback(callback);
+    }
 }
 
 void qauxv::InitializeNativeHookApi(bool allowHookLinker) {
